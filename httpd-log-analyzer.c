@@ -46,7 +46,6 @@
 
 // Global flags
 static int enable_geo_lookup = 0;
-static int detailed_mode = 0;
 static int debug_mode = 0;
 static int verbose_mode = 0;
 
@@ -330,14 +329,13 @@ static void show_usage(const char *program_name) {
     printf("  This C implementation is 5-15x faster than the shell script version.\n\n");
     printf("Options:\n");
     printf("  --enable-geo      Enable geographic IP lookup (default: disabled)\n");
-    printf("  --detailed-mode   Enable comprehensive attack pattern detection (default: fast mode)\n");
     printf("  --debug           Enable debug output\n");
     printf("  --verbose         Enable verbose processing information\n");
     printf("  -h, --help        Show this help message\n\n");
     printf("Examples:\n");
     printf("  %s /var/log/apache2/access.log\n", program_name);
     printf("  %s --enable-geo /var/log/nginx/access.log\n", program_name);
-    printf("  %s --detailed-mode --verbose /var/log/apache2/access.log\n\n", program_name);
+    printf("  %s --verbose /var/log/apache2/access.log\n\n", program_name);
     printf("Detected Attack Patterns:\n");
     printf("  - High frequency access (100+ requests in 5 minutes)\n");
     printf("  - Multiple 4xx errors (50+ client errors in 5 minutes)\n");
@@ -359,8 +357,6 @@ static int parse_arguments(int argc, char *argv[], char **log_file) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--enable-geo") == 0) {
             enable_geo_lookup = 1;
-        } else if (strcmp(argv[i], "--detailed-mode") == 0) {
-            detailed_mode = 1;
         } else if (strcmp(argv[i], "--debug") == 0) {
             debug_mode = 1;
         } else if (strcmp(argv[i], "--verbose") == 0) {
@@ -1441,8 +1437,7 @@ static int process_log_file(const char *filename) {
     
     if (verbose_mode) {
         printf("Processing %d lines from %s\n", total_lines, filename);
-        printf("Mode: %s, Geo lookup: %s\n", 
-               detailed_mode ? "Detailed" : "Fast",
+        printf("Geo lookup: %s\n", 
                enable_geo_lookup ? "Enabled" : "Disabled");
     }
     
@@ -1551,7 +1546,6 @@ static void generate_report(void) {
     printf("========================================\n");
     printf("解析実行時刻: %s\n", timestamp ? timestamp : "Unknown");
     printf("解析対象: 複数ログ形式対応 (C実装版)\n");
-    printf("解析モード: %s\n", detailed_mode ? "詳細モード" : "高速モード");
     printf("地理位置検索: %s\n", enable_geo_lookup ? "有効" : "無効");
     printf("処理時間: %ld秒\n", stats.end_time - stats.start_time);
     printf("\n");
