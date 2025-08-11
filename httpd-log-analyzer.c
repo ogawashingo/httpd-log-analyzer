@@ -58,6 +58,7 @@ typedef struct {
     int status;
     long size;
     char user_agent[256];
+    char username[64];  // Authentication username
 } log_entry_t;
 
 typedef struct {
@@ -111,27 +112,115 @@ static analysis_stats_t stats = {0};
 
 // SQL injection patterns
 static const char *sql_patterns[] = {
+    // Classic SQL injection
     "union.*select",
     "drop.*table", 
     "insert.*into",
     "update.*set",
     "delete.*from",
+    
+    // XSS patterns
     "script.*alert",
     "javascript:",
     "onload=",
     "onerror=",
+    
+    // URL encoded SQL injection
     "%27.*union",
     "%22.*select",
     "%3c.*script",
     "%3e",
+    
+    // Database-specific attacks
     "exec.*xp_",
     "sp_.*password",
     "information_schema",
     "mysql.*user",
     "pg_.*user",
+    
+    // Time-based attacks
     "waitfor.*delay",
     "benchmark.*\\(",
     "sleep.*\\(",
+    "pg_sleep.*\\(",
+    
+    // Advanced SQL injection techniques
+    "extractvalue.*\\(",
+    "updatexml.*\\(",
+    "exp.*\\(",
+    "floor.*rand.*\\(",
+    "count.*\\*.*group.*by",
+    "having.*\\(",
+    "procedure.*analyse",
+    "load_file.*\\(",
+    "into.*outfile",
+    "into.*dumpfile",
+    
+    // Boolean-based blind SQL injection
+    "and.*1=1",
+    "and.*1=2",
+    "or.*1=1",
+    "or.*1=2",
+    "%20and%201=1",
+    "%20or%201=1",
+    
+    // Union-based advanced patterns
+    "union.*all.*select",
+    "union.*select.*null",
+    "union.*select.*from",
+    "order.*by.*\\d+",
+    
+    // Comment-based evasion
+    "/\\*.*\\*/",
+    "--.*",
+    "#.*",
+    "%2d%2d",
+    "%2f%2a",
+    
+    // NoSQL injection patterns
+    "\\$ne.*:",
+    "\\$gt.*:",
+    "\\$lt.*:",
+    "\\$regex.*:",
+    "\\$where.*:",
+    "\\$or.*\\[",
+    "\\$and.*\\[",
+    
+    // WAF bypass techniques
+    "/*!.*select",
+    "/*!.*union",
+    "select.*\\+.*from",
+    "uni%6fn.*sel%65ct",
+    "0x.*select",
+    "char.*\\(",
+    "concat.*\\(",
+    "ascii.*\\(",
+    "substring.*\\(",
+    "mid.*\\(",
+    "left.*\\(",
+    "right.*\\(",
+    
+    // Double encoding
+    "%2527",
+    "%252f",
+    "%253c",
+    "%253e",
+    
+    // Alternative representations
+    "sel%65ct",
+    "un%69on",
+    "fr%6fm",
+    "wh%65re",
+    
+    // LDAP injection
+    "\\*\\)\\(",
+    "\\)\\(&",
+    "\\|\\(",
+    
+    // XML injection
+    "<!entity",
+    "<!\\[cdata",
+    
     NULL
 };
 
@@ -215,7 +304,7 @@ static int match_pattern(const char *text, const char *pattern) {
     
     int result = 0;
     
-    // Handle specific patterns for SQL injection and directory traversal
+    // Classic SQL injection patterns
     if (strcmp(pattern, "union.*select") == 0) {
         result = (strstr(text_lower, "union") && strstr(text_lower, "select"));
     } else if (strcmp(pattern, "drop.*table") == 0) {
@@ -226,7 +315,10 @@ static int match_pattern(const char *text, const char *pattern) {
         result = (strstr(text_lower, "update") && strstr(text_lower, "set"));
     } else if (strcmp(pattern, "delete.*from") == 0) {
         result = (strstr(text_lower, "delete") && strstr(text_lower, "from"));
-    } else if (strcmp(pattern, "script.*alert") == 0) {
+    }
+    
+    // XSS patterns
+    else if (strcmp(pattern, "script.*alert") == 0) {
         result = (strstr(text_lower, "script") && strstr(text_lower, "alert"));
     } else if (strcmp(pattern, "javascript:") == 0) {
         result = (strstr(text_lower, "javascript:") != NULL);
@@ -234,7 +326,10 @@ static int match_pattern(const char *text, const char *pattern) {
         result = (strstr(text_lower, "onload=") != NULL);
     } else if (strcmp(pattern, "onerror=") == 0) {
         result = (strstr(text_lower, "onerror=") != NULL);
-    } else if (strcmp(pattern, "%27.*union") == 0) {
+    }
+    
+    // URL encoded SQL injection
+    else if (strcmp(pattern, "%27.*union") == 0) {
         result = (strstr(text_lower, "%27") && strstr(text_lower, "union"));
     } else if (strcmp(pattern, "%22.*select") == 0) {
         result = (strstr(text_lower, "%22") && strstr(text_lower, "select"));
@@ -242,7 +337,10 @@ static int match_pattern(const char *text, const char *pattern) {
         result = (strstr(text_lower, "%3c") && strstr(text_lower, "script"));
     } else if (strcmp(pattern, "%3e") == 0) {
         result = (strstr(text_lower, "%3e") != NULL);
-    } else if (strcmp(pattern, "exec.*xp_") == 0) {
+    }
+    
+    // Database-specific attacks
+    else if (strcmp(pattern, "exec.*xp_") == 0) {
         result = (strstr(text_lower, "exec") && strstr(text_lower, "xp_"));
     } else if (strcmp(pattern, "sp_.*password") == 0) {
         result = (strstr(text_lower, "sp_") && strstr(text_lower, "password"));
@@ -252,13 +350,166 @@ static int match_pattern(const char *text, const char *pattern) {
         result = (strstr(text_lower, "mysql") && strstr(text_lower, "user"));
     } else if (strcmp(pattern, "pg_.*user") == 0) {
         result = (strstr(text_lower, "pg_") && strstr(text_lower, "user"));
-    } else if (strcmp(pattern, "waitfor.*delay") == 0) {
+    }
+    
+    // Time-based attacks
+    else if (strcmp(pattern, "waitfor.*delay") == 0) {
         result = (strstr(text_lower, "waitfor") && strstr(text_lower, "delay"));
     } else if (strcmp(pattern, "benchmark.*\\(") == 0) {
         result = (strstr(text_lower, "benchmark") && strstr(text_lower, "("));
     } else if (strcmp(pattern, "sleep.*\\(") == 0) {
         result = (strstr(text_lower, "sleep") && strstr(text_lower, "("));
-    } 
+    } else if (strcmp(pattern, "pg_sleep.*\\(") == 0) {
+        result = (strstr(text_lower, "pg_sleep") && strstr(text_lower, "("));
+    }
+    
+    // Advanced SQL injection techniques
+    else if (strcmp(pattern, "extractvalue.*\\(") == 0) {
+        result = (strstr(text_lower, "extractvalue") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "updatexml.*\\(") == 0) {
+        result = (strstr(text_lower, "updatexml") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "exp.*\\(") == 0) {
+        result = (strstr(text_lower, "exp") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "floor.*rand.*\\(") == 0) {
+        result = (strstr(text_lower, "floor") && strstr(text_lower, "rand") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "count.*\\*.*group.*by") == 0) {
+        result = (strstr(text_lower, "count") && strstr(text_lower, "*") && strstr(text_lower, "group") && strstr(text_lower, "by"));
+    } else if (strcmp(pattern, "having.*\\(") == 0) {
+        result = (strstr(text_lower, "having") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "procedure.*analyse") == 0) {
+        result = (strstr(text_lower, "procedure") && strstr(text_lower, "analyse"));
+    } else if (strcmp(pattern, "load_file.*\\(") == 0) {
+        result = (strstr(text_lower, "load_file") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "into.*outfile") == 0) {
+        result = (strstr(text_lower, "into") && strstr(text_lower, "outfile"));
+    } else if (strcmp(pattern, "into.*dumpfile") == 0) {
+        result = (strstr(text_lower, "into") && strstr(text_lower, "dumpfile"));
+    }
+    
+    // Boolean-based blind SQL injection
+    else if (strcmp(pattern, "and.*1=1") == 0) {
+        result = (strstr(text_lower, "and") && strstr(text_lower, "1=1"));
+    } else if (strcmp(pattern, "and.*1=2") == 0) {
+        result = (strstr(text_lower, "and") && strstr(text_lower, "1=2"));
+    } else if (strcmp(pattern, "or.*1=1") == 0) {
+        result = (strstr(text_lower, "or") && strstr(text_lower, "1=1"));
+    } else if (strcmp(pattern, "or.*1=2") == 0) {
+        result = (strstr(text_lower, "or") && strstr(text_lower, "1=2"));
+    } else if (strcmp(pattern, "%20and%201=1") == 0) {
+        result = (strstr(text_lower, "%20and%201=1") != NULL);
+    } else if (strcmp(pattern, "%20or%201=1") == 0) {
+        result = (strstr(text_lower, "%20or%201=1") != NULL);
+    }
+    
+    // Union-based advanced patterns
+    else if (strcmp(pattern, "union.*all.*select") == 0) {
+        result = (strstr(text_lower, "union") && strstr(text_lower, "all") && strstr(text_lower, "select"));
+    } else if (strcmp(pattern, "union.*select.*null") == 0) {
+        result = (strstr(text_lower, "union") && strstr(text_lower, "select") && strstr(text_lower, "null"));
+    } else if (strcmp(pattern, "union.*select.*from") == 0) {
+        result = (strstr(text_lower, "union") && strstr(text_lower, "select") && strstr(text_lower, "from"));
+    } else if (strcmp(pattern, "order.*by.*\\d+") == 0) {
+        result = (strstr(text_lower, "order") && strstr(text_lower, "by") && 
+                 (strstr(text_lower, "1") || strstr(text_lower, "2") || strstr(text_lower, "3") || 
+                  strstr(text_lower, "4") || strstr(text_lower, "5") || strstr(text_lower, "6") ||
+                  strstr(text_lower, "7") || strstr(text_lower, "8") || strstr(text_lower, "9")));
+    }
+    
+    // Comment-based evasion
+    else if (strcmp(pattern, "/\\*.*\\*/") == 0) {
+        result = (strstr(text_lower, "/*") && strstr(text_lower, "*/"));
+    } else if (strcmp(pattern, "--.*") == 0) {
+        result = (strstr(text_lower, "--") != NULL);
+    } else if (strcmp(pattern, "#.*") == 0) {
+        result = (strstr(text_lower, "#") != NULL);
+    } else if (strcmp(pattern, "%2d%2d") == 0) {
+        result = (strstr(text_lower, "%2d%2d") != NULL);
+    } else if (strcmp(pattern, "%2f%2a") == 0) {
+        result = (strstr(text_lower, "%2f%2a") != NULL);
+    }
+    
+    // NoSQL injection patterns
+    else if (strcmp(pattern, "\\$ne.*:") == 0) {
+        result = (strstr(text_lower, "$ne") && strstr(text_lower, ":"));
+    } else if (strcmp(pattern, "\\$gt.*:") == 0) {
+        result = (strstr(text_lower, "$gt") && strstr(text_lower, ":"));
+    } else if (strcmp(pattern, "\\$lt.*:") == 0) {
+        result = (strstr(text_lower, "$lt") && strstr(text_lower, ":"));
+    } else if (strcmp(pattern, "\\$regex.*:") == 0) {
+        result = (strstr(text_lower, "$regex") && strstr(text_lower, ":"));
+    } else if (strcmp(pattern, "\\$where.*:") == 0) {
+        result = (strstr(text_lower, "$where") && strstr(text_lower, ":"));
+    } else if (strcmp(pattern, "\\$or.*\\[") == 0) {
+        result = (strstr(text_lower, "$or") && strstr(text_lower, "["));
+    } else if (strcmp(pattern, "\\$and.*\\[") == 0) {
+        result = (strstr(text_lower, "$and") && strstr(text_lower, "["));
+    }
+    
+    // WAF bypass techniques
+    else if (strcmp(pattern, "/*!.*select") == 0) {
+        result = (strstr(text_lower, "/*!") && strstr(text_lower, "select"));
+    } else if (strcmp(pattern, "/*!.*union") == 0) {
+        result = (strstr(text_lower, "/*!") && strstr(text_lower, "union"));
+    } else if (strcmp(pattern, "select.*\\+.*from") == 0) {
+        result = (strstr(text_lower, "select") && strstr(text_lower, "+") && strstr(text_lower, "from"));
+    } else if (strcmp(pattern, "uni%6fn.*sel%65ct") == 0) {
+        result = (strstr(text_lower, "uni%6fn") && strstr(text_lower, "sel%65ct"));
+    } else if (strcmp(pattern, "0x.*select") == 0) {
+        result = (strstr(text_lower, "0x") && strstr(text_lower, "select"));
+    } else if (strcmp(pattern, "char.*\\(") == 0) {
+        result = (strstr(text_lower, "char") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "concat.*\\(") == 0) {
+        result = (strstr(text_lower, "concat") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "ascii.*\\(") == 0) {
+        result = (strstr(text_lower, "ascii") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "substring.*\\(") == 0) {
+        result = (strstr(text_lower, "substring") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "mid.*\\(") == 0) {
+        result = (strstr(text_lower, "mid") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "left.*\\(") == 0) {
+        result = (strstr(text_lower, "left") && strstr(text_lower, "("));
+    } else if (strcmp(pattern, "right.*\\(") == 0) {
+        result = (strstr(text_lower, "right") && strstr(text_lower, "("));
+    }
+    
+    // Double encoding
+    else if (strcmp(pattern, "%2527") == 0) {
+        result = (strstr(text_lower, "%2527") != NULL);
+    } else if (strcmp(pattern, "%252f") == 0) {
+        result = (strstr(text_lower, "%252f") != NULL);
+    } else if (strcmp(pattern, "%253c") == 0) {
+        result = (strstr(text_lower, "%253c") != NULL);
+    } else if (strcmp(pattern, "%253e") == 0) {
+        result = (strstr(text_lower, "%253e") != NULL);
+    }
+    
+    // Alternative representations
+    else if (strcmp(pattern, "sel%65ct") == 0) {
+        result = (strstr(text_lower, "sel%65ct") != NULL);
+    } else if (strcmp(pattern, "un%69on") == 0) {
+        result = (strstr(text_lower, "un%69on") != NULL);
+    } else if (strcmp(pattern, "fr%6fm") == 0) {
+        result = (strstr(text_lower, "fr%6fm") != NULL);
+    } else if (strcmp(pattern, "wh%65re") == 0) {
+        result = (strstr(text_lower, "wh%65re") != NULL);
+    }
+    
+    // LDAP injection
+    else if (strcmp(pattern, "\\*\\)\\(") == 0) {
+        result = (strstr(text_lower, "*)(") != NULL);
+    } else if (strcmp(pattern, "\\)\\(&") == 0) {
+        result = (strstr(text_lower, ")(&") != NULL);
+    } else if (strcmp(pattern, "\\|\\(") == 0) {
+        result = (strstr(text_lower, "|(") != NULL);
+    }
+    
+    // XML injection
+    else if (strcmp(pattern, "<!entity") == 0) {
+        result = (strstr(text_lower, "<!entity") != NULL);
+    } else if (strcmp(pattern, "<!\\[cdata") == 0) {
+        result = (strstr(text_lower, "<![cdata") != NULL);
+    }
+    
     // Directory traversal patterns
     else if (strcmp(pattern, "\\.\\./.*") == 0) {
         result = (strstr(text_lower, "../") != NULL);
@@ -537,11 +788,15 @@ static const char* detect_line_log_type(const char *line) {
     
     // Check for Apache ssl_request_log patterns first (most specific)
     // Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES256-GCM-SHA384 "GET /path HTTP/1.1" 200
+    // Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES256-GCM-SHA384 "{\"id\":1,\"method\"..." (JSON payload)
     if (strstr(line, "TLS") && 
         line[0] == '[' && 
         strstr(line, "] ") &&
         strstr(line, "\"") &&
-        (strstr(line, "GET ") || strstr(line, "POST ") || strstr(line, "PUT ") || strstr(line, "DELETE "))) {
+        ((strstr(line, "GET ") || strstr(line, "POST ") || strstr(line, "PUT ") || strstr(line, "DELETE ") ||
+          strstr(line, "HEAD ") || strstr(line, "OPTIONS ") || strstr(line, "PATCH ") || strstr(line, "PRI ") ||
+          strstr(line, "CONNECT ") || strstr(line, "TRACE ")) ||
+         (strstr(line, "\"{") && strstr(line, "\"id\":")))) {  // JSON payload pattern
         return "ssl_request_log";
     }
     
@@ -555,9 +810,29 @@ static const char* detect_line_log_type(const char *line) {
     
     // Check for access_log patterns (Common/Combined Log Format)
     // Pattern: IP - - [timestamp] "request" status size
-    if (strstr(line, " - - [") && strstr(line, "] \"") && 
-        (strstr(line, "GET ") || strstr(line, "POST ") || strstr(line, "PUT ") || strstr(line, "DELETE "))) {
+    // Pattern: IP - username [timestamp] "request" status size (with authentication)
+    // Pattern: IP - "" [timestamp] "request" status size (empty username)
+    if ((strstr(line, " - - [") || strstr(line, " - \"\" [") || 
+         (strstr(line, " - ") && strstr(line, " [") && !strstr(line, "] ["))) && 
+        strstr(line, "] \"") && 
+        (strstr(line, "GET ") || strstr(line, "POST ") || strstr(line, "PUT ") || strstr(line, "DELETE ") ||
+         strstr(line, "HEAD ") || strstr(line, "OPTIONS ") || strstr(line, "PATCH ") || strstr(line, "PRI ") ||
+         strstr(line, "CONNECT ") || strstr(line, "TRACE ") ||
+         strstr(line, "\"-\"") || strstr(line, "] \"\" "))) {  // Handle incomplete and empty requests
         return "access_log";
+    }
+    
+    // Check for timestamp-first access_log patterns
+    // Pattern: [timestamp] IP - - "request" status size
+    if (line[0] == '[' && 
+        strstr(line, "] ") && 
+        strstr(line, " - - \"") && 
+        strstr(line, "\"") &&
+        (strstr(line, "GET ") || strstr(line, "POST ") || strstr(line, "PUT ") || strstr(line, "DELETE ") ||
+         strstr(line, "HEAD ") || strstr(line, "OPTIONS ") || strstr(line, "PATCH ") || strstr(line, "PRI ") ||
+         strstr(line, "CONNECT ") || strstr(line, "TRACE ") ||
+         strstr(line, "\"-\"") || strstr(line, " \"\" "))) {  // Handle incomplete and empty requests
+        return "timestamp_first_access_log";
     }
     
     return "unknown";
@@ -590,21 +865,41 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
         if (quote_start && quote_end) {
             // Extract request
             int req_len = quote_end - quote_start - 1;
-            if (req_len > 0 && req_len < MAX_REQUEST_LENGTH) {
+            if (req_len >= 0 && req_len < MAX_REQUEST_LENGTH) {
                 char request[MAX_REQUEST_LENGTH];
                 strncpy(request, quote_start + 1, req_len);
                 request[req_len] = '\0';
                 
                 // Parse request method and URL
-                if (sscanf(request, "%15s %2047s", entry->method, entry->url) >= 1) {
-                    // Extract IP (first field)
+                // Handle incomplete requests (marked as "-") and empty requests
+                if (strcmp(request, "-") == 0) {
+                    strcpy(entry->method, "INCOMPLETE");
+                    strcpy(entry->url, "-");
+                    
+                    // Extract IP and username for incomplete requests too
                     char *line_copy = strdup(line);
                     if (line_copy) {
-                        char *token = strtok(line_copy, " ");
-                        if (token) {
-                            strncpy(entry->ip, token, MAX_IP_LENGTH - 1);
+                        char *ip_token = strtok(line_copy, " ");
+                        char *dash_token = strtok(NULL, " ");
+                        char *username_token = strtok(NULL, " ");
+                        
+                        if (ip_token) {
+                            strncpy(entry->ip, ip_token, MAX_IP_LENGTH - 1);
                             entry->ip[MAX_IP_LENGTH - 1] = '\0';
                         }
+                        
+                        if (username_token && strcmp(username_token, "-") != 0 && strcmp(username_token, "\"\"") != 0) {
+                            // Remove quotes if present
+                            if (username_token[0] == '"' && username_token[strlen(username_token)-1] == '"') {
+                                username_token[strlen(username_token)-1] = '\0';
+                                username_token++;
+                            }
+                            strncpy(entry->username, username_token, sizeof(entry->username) - 1);
+                            entry->username[sizeof(entry->username) - 1] = '\0';
+                        } else {
+                            strcpy(entry->username, "-");
+                        }
+                        
                         free(line_copy);
                     }
                     
@@ -615,7 +910,160 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                     char *next_space = strchr(after_quote, ' ');
                     if (next_space) {
                         entry->status = atoi(after_quote);
-                        entry->size = atol(next_space + 1);
+                        char *size_str = next_space + 1;
+                        while (*size_str == ' ') size_str++; // Skip spaces
+                        if (strcmp(size_str, "-") == 0) {
+                            entry->size = 0;
+                        } else {
+                            entry->size = atol(size_str);
+                        }
+                    } else {
+                        entry->status = atoi(after_quote);
+                        entry->size = 0;
+                    }
+                    
+                    // Extract timestamp (between [ and ])
+                    char *ts_start = strchr(line, '[');
+                    char *ts_end = ts_start ? strchr(ts_start, ']') : NULL;
+                    if (ts_start && ts_end) {
+                        int ts_len = ts_end - ts_start + 1;
+                        if (ts_len < 128) {
+                            char timestamp_str[128];
+                            strncpy(timestamp_str, ts_start, ts_len);
+                            timestamp_str[ts_len] = '\0';
+                            entry->timestamp = parse_timestamp(timestamp_str);
+                        }
+                    }
+                    
+                    // Sanitize strings
+                    sanitize_string(entry->ip);
+                    sanitize_string(entry->method);
+                    sanitize_string(entry->url);
+                    sanitize_string(entry->username);
+                    
+                    if (debug_mode) {
+                        printf("DEBUG: Successfully parsed incomplete access_log - IP: %s, Username: %s, Method: %s, URL: %s, Status: %d\n", 
+                               entry->ip, entry->username, entry->method, entry->url, entry->status);
+                    }
+                    
+                    return 1;
+                } else if (strcmp(request, "") == 0 || req_len == 0) {
+                    strcpy(entry->method, "EMPTY");
+                    strcpy(entry->url, "");
+                    
+                    // Extract IP and username for empty requests too
+                    char *line_copy = strdup(line);
+                    if (line_copy) {
+                        char *ip_token = strtok(line_copy, " ");
+                        char *dash_token = strtok(NULL, " ");
+                        char *username_token = strtok(NULL, " ");
+                        
+                        if (ip_token) {
+                            strncpy(entry->ip, ip_token, MAX_IP_LENGTH - 1);
+                            entry->ip[MAX_IP_LENGTH - 1] = '\0';
+                        }
+                        
+                        if (username_token && strcmp(username_token, "-") != 0 && strcmp(username_token, "\"\"") != 0) {
+                            // Remove quotes if present
+                            if (username_token[0] == '"' && username_token[strlen(username_token)-1] == '"') {
+                                username_token[strlen(username_token)-1] = '\0';
+                                username_token++;
+                            }
+                            strncpy(entry->username, username_token, sizeof(entry->username) - 1);
+                            entry->username[sizeof(entry->username) - 1] = '\0';
+                        } else {
+                            strcpy(entry->username, "-");
+                        }
+                        
+                        free(line_copy);
+                    }
+                    
+                    // Extract status and size (after the closing quote)
+                    char *after_quote = quote_end + 1;
+                    while (*after_quote == ' ') after_quote++; // Skip spaces
+                    
+                    char *next_space = strchr(after_quote, ' ');
+                    if (next_space) {
+                        entry->status = atoi(after_quote);
+                        char *size_str = next_space + 1;
+                        while (*size_str == ' ') size_str++; // Skip spaces
+                        if (strcmp(size_str, "-") == 0) {
+                            entry->size = 0;
+                        } else {
+                            entry->size = atol(size_str);
+                        }
+                    } else {
+                        entry->status = atoi(after_quote);
+                        entry->size = 0;
+                    }
+                    
+                    // Extract timestamp (between [ and ])
+                    char *ts_start = strchr(line, '[');
+                    char *ts_end = ts_start ? strchr(ts_start, ']') : NULL;
+                    if (ts_start && ts_end) {
+                        int ts_len = ts_end - ts_start + 1;
+                        if (ts_len < 128) {
+                            char timestamp_str[128];
+                            strncpy(timestamp_str, ts_start, ts_len);
+                            timestamp_str[ts_len] = '\0';
+                            entry->timestamp = parse_timestamp(timestamp_str);
+                        }
+                    }
+                    
+                    // Sanitize strings
+                    sanitize_string(entry->ip);
+                    sanitize_string(entry->method);
+                    sanitize_string(entry->url);
+                    sanitize_string(entry->username);
+                    
+                    if (debug_mode) {
+                        printf("DEBUG: Successfully parsed empty access_log - IP: %s, Username: %s, Method: %s, URL: %s, Status: %d\n", 
+                               entry->ip, entry->username, entry->method, entry->url, entry->status);
+                    }
+                    
+                    return 1;
+                } else if (sscanf(request, "%15s %2047s", entry->method, entry->url) >= 1) {
+                    // Extract IP and username (first three fields: IP - username)
+                    char *line_copy = strdup(line);
+                    if (line_copy) {
+                        char *ip_token = strtok(line_copy, " ");
+                        char *dash_token = strtok(NULL, " ");
+                        char *username_token = strtok(NULL, " ");
+                        
+                        if (ip_token) {
+                            strncpy(entry->ip, ip_token, MAX_IP_LENGTH - 1);
+                            entry->ip[MAX_IP_LENGTH - 1] = '\0';
+                        }
+                        
+                        if (username_token && strcmp(username_token, "-") != 0 && strcmp(username_token, "\"\"") != 0) {
+                            // Remove quotes if present
+                            if (username_token[0] == '"' && username_token[strlen(username_token)-1] == '"') {
+                                username_token[strlen(username_token)-1] = '\0';
+                                username_token++;
+                            }
+                            strncpy(entry->username, username_token, sizeof(entry->username) - 1);
+                            entry->username[sizeof(entry->username) - 1] = '\0';
+                        } else {
+                            strcpy(entry->username, "-");
+                        }
+                        
+                        free(line_copy);
+                    }
+                    
+                    // Extract status and size (after the closing quote)
+                    char *after_quote = quote_end + 1;
+                    while (*after_quote == ' ') after_quote++; // Skip spaces
+                    
+                    char *next_space = strchr(after_quote, ' ');
+                    if (next_space) {
+                        entry->status = atoi(after_quote);
+                        char *size_str = next_space + 1;
+                        while (*size_str == ' ') size_str++; // Skip spaces
+                        if (strcmp(size_str, "-") == 0) {
+                            entry->size = 0;
+                        } else {
+                            entry->size = atol(size_str);
+                        }
                     } else {
                         entry->status = atoi(after_quote);
                         entry->size = 0;
@@ -640,8 +1088,8 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                     sanitize_string(entry->url);
                     
                     if (debug_mode) {
-                        printf("DEBUG: Successfully parsed access_log - IP: %s, Method: %s, URL: %.50s..., Status: %d\n", 
-                               entry->ip, entry->method, entry->url, entry->status);
+                        printf("DEBUG: Successfully parsed access_log - IP: %s, Username: %s, Method: %s, URL: %.50s..., Status: %d\n", 
+                               entry->ip, entry->username, entry->method, entry->url, entry->status);
                     }
                     
                     return 1;
@@ -709,34 +1157,64 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                 }
                 
                 // Parse request method and URL (be more flexible)
-                char *space_pos = strchr(request, ' ');
-                if (space_pos) {
-                    // Extract method
-                    int method_len = space_pos - request;
-                    if (method_len > 0 && method_len < 16) {
-                        strncpy(entry->method, request, method_len);
-                        entry->method[method_len] = '\0';
+                // Check if this is a JSON payload (starts with '{')
+                if (request[0] == '{') {
+                    // JSON payload - extract method from JSON if possible
+                    strcpy(entry->method, "JSON-RPC");
+                    
+                    // Try to extract method from JSON
+                    char *method_pos = strstr(request, "\"method\":");
+                    if (method_pos) {
+                        char *method_start = strchr(method_pos + 9, '"');
+                        if (method_start) {
+                            method_start++; // Skip opening quote
+                            char *method_end = strchr(method_start, '"');
+                            if (method_end) {
+                                int method_len = method_end - method_start;
+                                if (method_len > 0 && method_len < 64) {
+                                    char json_method[64];
+                                    strncpy(json_method, method_start, method_len);
+                                    json_method[method_len] = '\0';
+                                    snprintf(entry->method, sizeof(entry->method), "JSON:%s", json_method);
+                                }
+                            }
+                        }
                     }
                     
-                    // Extract URL
-                    char *url_start = space_pos + 1;
-                    char *url_end = strchr(url_start, ' ');
-                    if (url_end) {
-                        int url_len = url_end - url_start;
-                        if (url_len > 0 && url_len < MAX_URL_LENGTH) {
-                            strncpy(entry->url, url_start, url_len);
-                            entry->url[url_len] = '\0';
+                    // Store the JSON payload as URL (truncated if too long)
+                    strncpy(entry->url, request, sizeof(entry->url) - 1);
+                    entry->url[sizeof(entry->url) - 1] = '\0';
+                } else {
+                    // Regular HTTP request
+                    char *space_pos = strchr(request, ' ');
+                    if (space_pos) {
+                        // Extract method
+                        int method_len = space_pos - request;
+                        if (method_len > 0 && method_len < 16) {
+                            strncpy(entry->method, request, method_len);
+                            entry->method[method_len] = '\0';
+                        }
+                        
+                        // Extract URL
+                        char *url_start = space_pos + 1;
+                        char *url_end = strchr(url_start, ' ');
+                        if (url_end) {
+                            int url_len = url_end - url_start;
+                            if (url_len > 0 && url_len < MAX_URL_LENGTH) {
+                                strncpy(entry->url, url_start, url_len);
+                                entry->url[url_len] = '\0';
+                            }
+                        } else {
+                            // No space found, use rest of request as URL
+                            strncpy(entry->url, url_start, sizeof(entry->url) - 1);
+                            entry->url[sizeof(entry->url) - 1] = '\0';
                         }
                     } else {
-                        // No space found, use rest of request as URL
-                        strncpy(entry->url, url_start, sizeof(entry->url) - 1);
-                        entry->url[sizeof(entry->url) - 1] = '\0';
+                        // No space in request, treat entire request as method
+                        strncpy(entry->method, request, sizeof(entry->method) - 1);
+                        entry->method[sizeof(entry->method) - 1] = '\0';
+                        strcpy(entry->url, "/");
                     }
-                } else {
-                    // No space in request, treat entire request as method
-                    strncpy(entry->method, request, sizeof(entry->method) - 1);
-                    entry->method[sizeof(entry->method) - 1] = '\0';
-                    strcpy(entry->url, "/");
                 }
                 
                 // Extract status code (after the closing quote, if it exists)
@@ -846,6 +1324,139 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
         
         if (debug_mode) {
             printf("DEBUG: Failed to find [client IP] pattern in error_log line\n");
+        }
+    }
+    else if (strcmp(log_type, "timestamp_first_access_log") == 0) {
+        // Parse timestamp-first access_log format
+        // Format: [timestamp] IP - - "request" status size
+        
+        if (debug_mode) {
+            printf("DEBUG: Parsing timestamp_first_access_log line: %.200s\n", line);
+        }
+        
+        // Extract timestamp (first bracketed part)
+        if (line[0] == '[') {
+            char *ts_end = strchr(line + 1, ']');
+            if (ts_end) {
+                int ts_len = ts_end - line + 1;
+                if (ts_len < 128) {
+                    char timestamp_str[128];
+                    strncpy(timestamp_str, line, ts_len);
+                    timestamp_str[ts_len] = '\0';
+                    entry->timestamp = parse_timestamp(timestamp_str);
+                    
+                    if (debug_mode) {
+                        printf("DEBUG: Parsed timestamp: %s -> %ld\n", timestamp_str, entry->timestamp);
+                    }
+                }
+                
+                // Extract IP address (after timestamp and space)
+                char *ip_start = ts_end + 1;
+                while (*ip_start == ' ') ip_start++; // Skip spaces
+                
+                char *ip_end = strchr(ip_start, ' ');
+                if (ip_end) {
+                    int ip_len = ip_end - ip_start;
+                    if (ip_len > 0 && ip_len < MAX_IP_LENGTH) {
+                        strncpy(entry->ip, ip_start, ip_len);
+                        entry->ip[ip_len] = '\0';
+                        
+                        if (debug_mode) {
+                            printf("DEBUG: Extracted IP: '%s'\n", entry->ip);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Find the quoted request part
+        char *quote_start = strchr(line, '"');
+        char *quote_end = quote_start ? strchr(quote_start + 1, '"') : NULL;
+        
+        if (quote_start && quote_end) {
+            // Extract request
+            int req_len = quote_end - quote_start - 1;
+            if (req_len > 0 && req_len < MAX_REQUEST_LENGTH) {
+                char request[MAX_REQUEST_LENGTH];
+                strncpy(request, quote_start + 1, req_len);
+                request[req_len] = '\0';
+                
+                if (debug_mode) {
+                    printf("DEBUG: Extracted request: '%s'\n", request);
+                }
+                
+                // Parse request method and URL
+                // Handle incomplete requests (marked as "-")
+                if (strcmp(request, "-") == 0) {
+                    strcpy(entry->method, "INCOMPLETE");
+                    strcpy(entry->url, "-");
+                } else {
+                    char *space_pos = strchr(request, ' ');
+                    if (space_pos) {
+                        // Extract method
+                        int method_len = space_pos - request;
+                        if (method_len > 0 && method_len < 16) {
+                            strncpy(entry->method, request, method_len);
+                            entry->method[method_len] = '\0';
+                        }
+                        
+                        // Extract URL
+                        char *url_start = space_pos + 1;
+                        char *url_end = strchr(url_start, ' ');
+                        if (url_end) {
+                            int url_len = url_end - url_start;
+                            if (url_len > 0 && url_len < MAX_URL_LENGTH) {
+                                strncpy(entry->url, url_start, url_len);
+                                entry->url[url_len] = '\0';
+                            }
+                        } else {
+                            // No space found, use rest of request as URL
+                            strncpy(entry->url, url_start, sizeof(entry->url) - 1);
+                            entry->url[sizeof(entry->url) - 1] = '\0';
+                        }
+                    } else {
+                        // No space in request, treat entire request as method
+                        strncpy(entry->method, request, sizeof(entry->method) - 1);
+                        entry->method[sizeof(entry->method) - 1] = '\0';
+                        strcpy(entry->url, "/");
+                    }
+                }
+                
+                // Extract status code (after the closing quote)
+                char *status_start = quote_end + 1;
+                while (*status_start == ' ') status_start++; // Skip spaces
+                entry->status = atoi(status_start);
+                
+                // Extract size (after status)
+                char *size_start = strchr(status_start, ' ');
+                if (size_start) {
+                    size_start++;
+                    while (*size_start == ' ') size_start++; // Skip spaces
+                    entry->size = atol(size_start);
+                } else {
+                    entry->size = 0;
+                }
+                
+                if (entry->timestamp == 0) {
+                    entry->timestamp = time(NULL); // Fallback to current time
+                }
+                
+                // Sanitize strings
+                sanitize_string(entry->ip);
+                sanitize_string(entry->method);
+                sanitize_string(entry->url);
+                
+                if (debug_mode) {
+                    printf("DEBUG: Successfully parsed timestamp_first_access_log - IP: %s, Method: %s, URL: %s, Status: %d\n", 
+                           entry->ip, entry->method, entry->url, entry->status);
+                }
+                
+                return 1;
+            }
+        }
+        
+        if (debug_mode) {
+            printf("DEBUG: Failed to parse timestamp_first_access_log format - no quoted request found\n");
         }
     }
     
@@ -1466,6 +2077,39 @@ static int process_log_file(const char *filename) {
             detected += detect_4xx_errors(entry.ip, entry.status, entry.timestamp);
             detected += detect_sql_injection(entry.url, entry.ip);
             detected += detect_directory_traversal(entry.url, entry.ip);
+            
+            // Check for suspicious CONNECT method usage
+            if (strcmp(entry.method, "CONNECT") == 0) {
+                record_suspicious_ip(entry.ip, "不正なCONNECTメソッド使用", 1);
+                detected++;
+                if (debug_mode) {
+                    printf("DEBUG: Suspicious CONNECT method detected - IP: %s, Target: %s, Status: %d\n", 
+                           entry.ip, entry.url, entry.status);
+                }
+            }
+            
+            // Check for empty requests (potential attack or malformed requests)
+            if (strcmp(entry.method, "EMPTY") == 0) {
+                record_suspicious_ip(entry.ip, "空のHTTPリクエスト", 1);
+                detected++;
+                if (debug_mode) {
+                    printf("DEBUG: Empty HTTP request detected - IP: %s, Status: %d\n", 
+                           entry.ip, entry.status);
+                }
+            }
+            
+            // Check for JSON-RPC requests (potential API abuse)
+            if (strncmp(entry.method, "JSON", 4) == 0) {
+                if (debug_mode) {
+                    printf("DEBUG: JSON-RPC request detected - IP: %s, Method: %s, Payload: %.100s...\n", 
+                           entry.ip, entry.method, entry.url);
+                }
+                // Only flag as suspicious if there are error status codes
+                if (entry.status >= 400) {
+                    record_suspicious_ip(entry.ip, "JSON-RPC攻撃試行", 1);
+                    detected++;
+                }
+            }
             
             // For error_log entries, also check for error-specific threats
             if (strcmp(entry.method, "ERROR_LOG") == 0) {

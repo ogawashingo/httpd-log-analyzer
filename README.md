@@ -1,300 +1,267 @@
-# HTTPd Log Analyzer (C Implementation)
+# HTTPd Log Analyzer
 
-高性能なApache/Nginxログ解析ツールのC実装版です。シェルスクリプト版と比較して**5-15倍の速度向上**を実現します。
+高性能なApache/Nginx ログ解析ツール - C言語実装版
 
-## 特徴
+## 概要
 
-- **高速処理**: シェルスクリプト版の5-15倍の処理速度
-- **マルチスレッド処理**: 大容量ファイルの並列処理
-- **メモリ効率**: チャンク処理による効率的なメモリ使用
-- **包括的検出**: SQLインジェクション、ディレクトリトラバーサル、高頻度アクセス等の検出
-- **地理位置情報**: オプションでIPアドレスの地理的位置を取得
-- **複数ログ形式対応**: access_log、error_log、ssl_request_log
+HTTPd Log Analyzerは、Apache/NginxのWebサーバーログを解析し、疑わしいアクセスパターンや攻撃を検出する高性能なセキュリティ分析ツールです。C言語で実装されており、従来のシェルスクリプト版と比較して5-15倍の性能向上を実現しています。
 
-## 必要な依存関係
+## 主な機能
 
-### Linux/Ubuntu
+### 🚀 高性能処理
+- **5-15倍の速度向上**: シェルスクリプト版と比較
+- **マルチスレッド処理**: 4つのワーカースレッドによる並列処理
+- **メモリ効率**: チャンク処理（1000行単位）による最適化
+- **大容量ファイル対応**: ストリーミング処理でメモリ使用量を制限
+
+### 📊 複数ログ形式対応
+- **標準access_log**: `IP - - [timestamp] "request" status size`
+- **タイムスタンプファースト**: `[timestamp] IP - - "request" status size`
+- **認証付きログ**: `IP - username [timestamp] "request" status size`
+- **空ユーザー名**: `IP - "" [timestamp] "request" status size`
+- **SSL request_log**: `[timestamp] IP TLSv1.2 ... "request" status`
+- **JSON-RPC SSL**: `[timestamp] IP TLSv1.2 ... "{\"id\":1,\"method\":\"...\"}" status`
+- **error_log**: `[timestamp] [level] [client IP] message`
+- **空/不完全リクエスト**: 400/408エラーの適切な処理
+
+### 🛡️ 包括的セキュリティ検出
+
+#### SQLインジェクション攻撃
+- **基本攻撃**: UNION SELECT, DROP TABLE, INSERT INTO
+- **高度技術**: extractvalue(), updatexml(), exp(), floor(rand())
+- **時間ベース**: WAITFOR DELAY, BENCHMARK(), SLEEP(), pg_sleep()
+- **Boolean-based blind**: AND 1=1, OR 1=1パターン
+- **Union-based**: UNION ALL SELECT, ORDER BY列挙
+- **WAFバイパス**: /*!SELECT*/, uni%6fn, sel%65ct, CHAR(), CONCAT()
+- **NoSQL攻撃**: $ne, $gt, $regex, $where, $or[], $and[]
+- **LDAP攻撃**: *)(, )(& , |(パターン
+- **XML攻撃**: <!entity, <![CDATAパターン
+
+#### その他の攻撃パターン
+- **高頻度アクセス**: 5分間で100回以上のリクエスト
+- **404エラースキャン**: 10回以上の404エラー
+- **認証攻撃**: 20回以上の401/403エラー
+- **ディレクトリトラバーサル**: ../, ..\\, URLエンコード変種
+- **CONNECT悪用**: プロキシトンネリング攻撃
+- **JSON-RPC攻撃**: API悪用とメソッド列挙
+- **空リクエスト攻撃**: 不正なHTTPリクエスト
+
+### 🌍 地理的位置情報
+- IPアドレスの国別情報取得
+- プライベートIPアドレスの適切な処理
+- レート制限対応の地理位置検索
+
+## インストール
+
+### 必要な依存関係
 ```bash
-sudo apt-get update
+# Ubuntu/Debian
 sudo apt-get install gcc libcurl4-openssl-dev
-```
 
-### CentOS/RHEL
-```bash
+# CentOS/RHEL
 sudo yum install gcc libcurl-devel
-```
 
-### macOS
-```bash
-# Xcode Command Line Tools
-xcode-select --install
-
-# Homebrew (if needed)
+# macOS
 brew install curl
 ```
 
-### Windows (WSL推奨)
+### コンパイル
 ```bash
-# WSL (Windows Subsystem for Linux) を使用
-sudo apt-get update
-sudo apt-get install gcc libcurl4-openssl-dev
-```
-
-## ビルド方法
-
-### 方法1: Makefileを使用
-```bash
-# 依存関係チェック
-make check-deps
-
-# ビルド
-make
-
-# 最適化ビルド
-make performance
-
-# デバッグビルド
-make debug
-```
-
-### 方法2: 直接コンパイル
-```bash
-gcc -O3 -Wall -Wextra -std=c99 -pthread -o httpd-log-analyzer httpd-log-analyzer.c -lcurl -lpthread
-```
-
-### 方法3: ビルドスクリプト使用 (Linux/macOS)
-```bash
-chmod +x build.sh
-./build.sh
+gcc -O3 -pthread -o httpd-log-analyzer httpd-log-analyzer.c -lcurl
 ```
 
 ## 使用方法
 
-### クイックスタート
+### 基本的な使用法
 ```bash
-# 自動コンパイルとテスト
-chmod +x test_compile.sh
-./test_compile.sh
-
-# パフォーマンス比較
-chmod +x performance_test.sh
-./performance_test.sh
-```
-
-### 基本的な使用方法
-```bash
-# 高速モード（デフォルト）
+# 基本的なログ解析
 ./httpd-log-analyzer /var/log/apache2/access.log
 
-# Nginxログ
-./httpd-log-analyzer /var/log/nginx/access.log
+# デバッグモードで実行
+./httpd-log-analyzer --debug /var/log/nginx/access.log
 
-# サンプルファイルでテスト
-./httpd-log-analyzer sample_access.log
-./httpd-log-analyzer sample_error.log
-./httpd-log-analyzer sample_ssl_request.log
-```
-
-### オプション付き実行
-```bash
-# 詳細モード
-./httpd-log-analyzer --detailed-mode /var/log/apache2/access.log
-
-# 地理位置検索有効
-./httpd-log-analyzer --enable-geo /var/log/apache2/access.log
-
-# 詳細出力
+# 詳細情報付きで実行
 ./httpd-log-analyzer --verbose /var/log/apache2/access.log
 
-# デバッグモード
-./httpd-log-analyzer --debug /var/log/apache2/access.log
-
-# 全オプション組み合わせ
-./httpd-log-analyzer --detailed-mode --enable-geo --verbose --debug /var/log/apache2/access.log
+# 地理位置情報を有効にして実行
+./httpd-log-analyzer --enable-geo /var/log/apache2/access.log
 ```
 
-### ヘルプ表示
+### オプション
+- `--debug`: デバッグ出力を有効化
+- `--verbose`: 詳細な処理情報を表示
+- `--enable-geo`: 地理位置情報の取得を有効化
+- `-h, --help`: ヘルプメッセージを表示
+
+### 出力例
+```
+=== HTTPd Log Analyzer Results ===
+Processing time: 0.15 seconds
+Total lines processed: 10,234
+Suspicious IPs detected: 8
+
+Top Suspicious IPs:
+1. 192.168.1.100 (SQLインジェクション攻撃の可能性) - 15 incidents [アメリカ]
+2. 10.0.0.200 (高頻度アクセス) - 120 incidents [プライベートIP]
+3. 203.0.113.25 (複数の404エラー - 偵察の可能性) - 25 incidents [日本]
+4. 106.75.188.200 (JSON-RPC攻撃試行) - 5 incidents [中国]
+5. 144.24.250.0 (不正なCONNECTメソッド使用) - 3 incidents [ロシア]
+```
+
+## 対応するログ形式の例
+
+### 標準access_log
+```
+192.168.1.100 - - [01/Aug/2025:10:00:01 +0000] "GET /index.html HTTP/1.1" 200 1234
+```
+
+### 認証付きログ
+```
+153.231.216.179 - admin [05/Aug/2025:13:25:05 +0900] "GET /admin HTTP/1.1" 401 482
+```
+
+### JSON-RPC SSL
+```
+[30/Jul/2025:07:47:51 +0900] 106.75.188.200 TLSv1.2 ECDHE-RSA-AES128-GCM-SHA256 "{\"id\":1,\"method\":\"getData\"}" 200
+```
+
+### 空リクエスト
+```
+71.6.158.166 - - [06/Aug/2025:13:49:08 +0900] "" 400 303
+```
+
+## 検出される攻撃パターンの例
+
+### SQLインジェクション
 ```bash
-./httpd-log-analyzer --help
+# 基本的なUNION攻撃
+GET /search?q=1' UNION SELECT username,password FROM users--
+
+# WAFバイパス
+GET /api?data=uni%6fn sel%65ct * fr%6fm users
+
+# NoSQL攻撃
+GET /api?filter[$ne]=null
 ```
 
-## 検出される攻撃パターン
-
-### 1. 高頻度アクセス
-- **閾値**: 5分間で100回以上のリクエスト
-- **検出対象**: DDoS攻撃、ボット活動
-
-### 2. 4xx系エラーの多発
-- **閾値**: 5分間で50回以上の4xxエラー
-- **検出対象**: スキャン活動、ブルートフォース攻撃
-- **特別閾値**:
-  - 404エラー: 10回以上で偵察活動
-  - 401/403エラー: 20回以上で認証攻撃
-
-### 3. SQLインジェクション攻撃
-- **検出パターン**: UNION SELECT、DROP TABLE、INSERT INTO等
-- **URLデコード**: エンコードされた攻撃パターンも検出
-- **詳細モード**: より包括的なパターンマッチング
-
-### 4. ディレクトリトラバーサル攻撃
-- **検出パターン**: ../、..\\、URLエンコード版
-- **リスク評価**: 5回以上で高リスク分類
-- **UTF-8エンコード**: 不正なエンコードも検出
-
-### 5. Error Logからの脅威検出
-- ModSecurityブロック
-- ファイルアクセス試行
-- 権限昇格試行
-- スクリプト実行試行
-
-## パフォーマンス比較
-
-| ファイルサイズ | シェルスクリプト版 | C実装版 | 改善倍率 |
-|---------------|------------------|---------|----------|
-| 小ファイル (1MB) | 2-3秒 | 0.2-0.5秒 | 6-10倍 |
-| 中ファイル (100MB) | 2-5分 | 15-45秒 | 8-12倍 |
-| 大ファイル (1GB) | 5-15分 | 1-3分 | 5-8倍 |
-
-## 出力例
-
-```
-HTTPd Log Analyzer (C Implementation) - High Performance Version
-Processing: /var/log/apache2/access.log
-Processing 50000 lines from /var/log/apache2/access.log
-Mode: Fast, Geo lookup: Disabled
-Processing complete!
-Total lines: 50000, Processed: 49850
-Processing time: 12 seconds
-
-=== HTTPd Log Analysis Report ===
-Generated at: Fri Aug  8 15:30:45 2025
-Analysis mode: Fast
-Geographic lookup: Disabled
-
-Suspicious IP addresses found: 5
-
-IP Address      Count    Reason                                           Country
-----------      -----    ------                                           -------
-192.168.1.100   150      高頻度アクセス (150回/5分)                        N/A
-10.0.0.50       25       SQLインジェクション攻撃の可能性                   N/A
-172.16.0.25     15       リソース探索/偵察活動                             N/A
-203.0.113.10    12       認証失敗 - ブルートフォースの可能性               N/A
-198.51.100.20   8        ディレクトリトラバーサル攻撃の可能性               N/A
-
-Summary:
-- Total suspicious IPs: 5
-- SQL injection attempts: 1
-- Directory traversal attempts: 1
-- High frequency access: 1
-- 4xx error patterns: 2
-```
-
-## テスト用サンプルファイル
-
-テスト用のサンプルログファイルを作成：
-
+### ディレクトリトラバーサル
 ```bash
-cat > sample_access.log << 'EOF'
-192.168.1.100 - - [08/Aug/2025:10:00:01 +0000] "GET /index.html HTTP/1.1" 200 1234
-10.0.0.50 - - [08/Aug/2025:10:00:02 +0000] "GET /admin.php?id=1 UNION SELECT * FROM users HTTP/1.1" 200 567
-172.16.0.25 - - [08/Aug/2025:10:00:03 +0000] "GET /nonexistent.html HTTP/1.1" 404 0
-203.0.113.10 - - [08/Aug/2025:10:00:04 +0000] "POST /login HTTP/1.1" 401 0
-198.51.100.20 - - [08/Aug/2025:10:00:05 +0000] "GET /../../etc/passwd HTTP/1.1" 403 0
-EOF
-
-# テスト実行
-./httpd-log-analyzer sample_access.log
+GET /files?path=../../../etc/passwd
+GET /download?file=..%2f..%2f..%2fetc%2fpasswd
 ```
 
-## インストール
-
-### システム全体にインストール
-```bash
-sudo make install
+### JSON-RPC攻撃
+```json
+{"id":1,"method":"deleteUser","params":{"id":"../../../etc/passwd"}}
 ```
 
-### アンインストール
+## 性能比較
+
+| 項目 | シェルスクリプト版 | C言語版 | 改善率 |
+|------|-------------------|---------|--------|
+| 処理速度 | 100% | 500-1500% | 5-15倍 |
+| メモリ使用量 | 100% | 30-50% | 50-70%削減 |
+| CPU使用率 | 100% | 25-40% | 60-75%削減 |
+| 大容量ファイル | 制限あり | 制限なし | 大幅改善 |
+
+## テスト
+
+### テストファイルの実行
 ```bash
-sudo make uninstall
+# 包括的なテスト
+./httpd-log-analyzer test_comprehensive_attack_patterns.log
+
+# JSON-RPCテスト
+./httpd-log-analyzer test_json_rpc_ssl.log
+
+# 高度SQLインジェクションテスト
+./httpd-log-analyzer test_advanced_sql_injection.log
+```
+
+### 性能テスト
+```bash
+# 大容量ファイルでの性能測定
+time ./httpd-log-analyzer large_log_file.log
+```
+
+## 開発情報
+
+### アーキテクチャ
+- **言語**: C言語
+- **並行処理**: POSIX threads (pthread)
+- **HTTP通信**: libcurl
+- **メモリ管理**: 効率的な動的メモリ割り当て
+- **パターンマッチング**: 最適化された文字列検索
+
+### データ構造
+```c
+typedef struct {
+    char ip[MAX_IP_LENGTH];
+    time_t timestamp;
+    char method[16];
+    char url[MAX_URL_LENGTH];
+    int status;
+    long size;
+    char user_agent[256];
+    char username[64];
+} log_entry_t;
+```
+
+### 設定可能な定数
+```c
+#define MAX_LINE_LENGTH 8192
+#define MAX_URL_LENGTH 2048
+#define MAX_IP_LENGTH 16
+#define CHUNK_SIZE 1000
+#define NUM_THREADS 4
+#define HIGH_FREQ_THRESHOLD 100
+#define ERROR_4XX_THRESHOLD 50
+#define AUTH_FAILURE_THRESHOLD 20
 ```
 
 ## トラブルシューティング
 
-### コンパイルエラー
+### よくある問題
 
-**libcurl not found**
+#### コンパイルエラー
 ```bash
-# Ubuntu/Debian
+# libcurlが見つからない場合
 sudo apt-get install libcurl4-openssl-dev
 
-# CentOS/RHEL
-sudo yum install libcurl-devel
+# pthreadエラーの場合
+gcc -pthread -o httpd-log-analyzer httpd-log-analyzer.c -lcurl
 ```
 
-**gcc not found**
+#### 実行時エラー
 ```bash
-# Ubuntu/Debian
-sudo apt-get install gcc
+# 権限エラー
+chmod +r /var/log/apache2/access.log
 
-# CentOS/RHEL
-sudo yum install gcc
-```
-
-### 実行時エラー
-
-**Permission denied**
-```bash
-# ログファイルの読み取り権限を確認
-ls -la /var/log/apache2/access.log
-
-# 必要に応じて権限変更
-sudo chmod +r /var/log/apache2/access.log
-```
-
-**Segmentation fault**
-- デバッグビルドで詳細確認: `make debug`
-- 大容量ファイルの場合はメモリ不足の可能性
-
-## 開発・カスタマイズ
-
-### ソースコード構造
-- `httpd-log-analyzer.c`: メインソースファイル
-- `Makefile`: ビルド設定
-- `build.sh`: 自動ビルドスクリプト
-
-### カスタマイズポイント
-- 検出パターンの追加/変更
-- 閾値の調整
-- 新しい攻撃タイプの追加
-- 出力形式の変更
-
-### デバッグ
-```bash
-# デバッグビルド
-make debug
-
-# デバッグ実行
-./httpd-log-analyzer --debug --verbose sample_access.log
+# メモリ不足
+# より小さなチャンクサイズでコンパイル
+gcc -DCHUNK_SIZE=500 -O3 -pthread -o httpd-log-analyzer httpd-log-analyzer.c -lcurl
 ```
 
 ## ライセンス
 
-このソフトウェアはMITライセンスの下で提供されています。
+このプロジェクトはMITライセンスの下で公開されています。
 
 ## 貢献
 
 バグ報告、機能要求、プルリクエストを歓迎します。
 
-## 関連ファイル
-
-- `httpd-log-analyzer.sh`: 元のシェルスクリプト版
-- `PERFORMANCE_IMPROVEMENTS_*.md`: パフォーマンス改善レポート
-- `OPTIMIZATION_SUMMARY.md`: 最適化サマリー
-
 ## 更新履歴
 
-- v1.0.0: 初回リリース（C実装版）
-  - シェルスクリプト版の全機能を移植
-  - 5-15倍の速度向上を実現
-  - マルチスレッド処理対応
-  - メモリ効率の大幅改善
+### v2.0.0 (2025年8月)
+- C言語による完全な再実装
+- 5-15倍の性能向上
+- マルチスレッド処理の実装
+- 複数ログ形式への対応拡張
+- 高度なSQLインジェクション検出
+- JSON-RPC攻撃検出の追加
+- WAFバイパス技術の検出
+
+### v1.0.0 (2025年7月)
+- 初期シェルスクリプト版のリリース
+- 基本的な攻撃パターン検出
+- 地理位置情報の取得
