@@ -788,16 +788,30 @@ static const char* detect_line_log_type(const char *line) {
     
     // Check for Apache ssl_request_log patterns first (most specific)
     // Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES256-GCM-SHA384 "GET /path HTTP/1.1" 200
+    // Pattern: [timestamp] IP SSLv3 DES-CBC3-SHA "GET /path HTTP/1.1" 4961
+    // Pattern: [timestamp] IP TLSv1 ECDHE-RSA-AES256-SHA "" 303 (empty request)
+    // Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES128-GCM-SHA256 "-" - (incomplete request)
+    // Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES128-GCM-SHA256 "quit" 303 (non-HTTP command)
     // Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES256-GCM-SHA384 "{\"id\":1,\"method\"..." (JSON payload)
-    if (strstr(line, "TLS") && 
+    if ((strstr(line, "TLS") || strstr(line, "SSL")) && 
         line[0] == '[' && 
         strstr(line, "] ") &&
-        strstr(line, "\"") &&
-        ((strstr(line, "GET ") || strstr(line, "POST ") || strstr(line, "PUT ") || strstr(line, "DELETE ") ||
-          strstr(line, "HEAD ") || strstr(line, "OPTIONS ") || strstr(line, "PATCH ") || strstr(line, "PRI ") ||
-          strstr(line, "CONNECT ") || strstr(line, "TRACE ")) ||
-         (strstr(line, "\"{") && strstr(line, "\"id\":")))) {  // JSON payload pattern
-        return "ssl_request_log";
+        strstr(line, "\"")) {
+        // Check for standard HTTP methods
+        if ((strstr(line, "GET ") || strstr(line, "POST ") || strstr(line, "PUT ") || strstr(line, "DELETE ") ||
+             strstr(line, "HEAD ") || strstr(line, "OPTIONS ") || strstr(line, "PATCH ") || strstr(line, "PRI ") ||
+             strstr(line, "CONNECT ") || strstr(line, "TRACE ")) ||
+            (strstr(line, "\"{") && strstr(line, "\"id\":")) ||  // JSON payload pattern
+            (strstr(line, "\"\" ")) ||  // Empty request pattern
+            (strstr(line, "\"-\" "))) {  // Incomplete request pattern
+            return "ssl_request_log";
+        }
+        // Check for any quoted content (could be non-HTTP commands)
+        char *quote_start = strchr(line, '"');
+        char *quote_end = quote_start ? strchr(quote_start + 1, '"') : NULL;
+        if (quote_start && quote_end && quote_end > quote_start + 1) {
+            return "ssl_request_log";
+        }
     }
     
     // Check for error_log patterns
@@ -1147,7 +1161,7 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
             
             // Extract request
             int req_len = quote_end - quote_start - 1;
-            if (req_len > 0 && req_len < MAX_REQUEST_LENGTH) {
+            if (req_len >= 0 && req_len < MAX_REQUEST_LENGTH) {
                 char request[MAX_REQUEST_LENGTH];
                 strncpy(request, quote_start + 1, req_len);
                 request[req_len] = '\0';
@@ -1157,8 +1171,26 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                 }
                 
                 // Parse request method and URL (be more flexible)
+                // Check if this is an empty request
+                if (strcmp(request, "") == 0 || req_len == 0) {
+                    strcpy(entry->method, "SSL_EMPTY");
+                    strcpy(entry->url, "");
+                    
+                    if (debug_mode) {
+                        printf("DEBUG: Empty SSL request detected\n");
+                    }
+                }
+                // Check if this is an incomplete request (marked as "-")
+                else if (strcmp(request, "-") == 0) {
+                    strcpy(entry->method, "SSL_INCOMPLETE");
+                    strcpy(entry->url, "-");
+                    
+                    if (debug_mode) {
+                        printf("DEBUG: Incomplete SSL request detected\n");
+                    }
+                }
                 // Check if this is a JSON payload (starts with '{')
-                if (request[0] == '{') {
+                else if (request[0] == '{') {
                     // JSON payload - extract method from JSON if possible
                     strcpy(entry->method, "JSON-RPC");
                     
@@ -1185,35 +1217,55 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                     strncpy(entry->url, request, sizeof(entry->url) - 1);
                     entry->url[sizeof(entry->url) - 1] = '\0';
                 } else {
-                    // Regular HTTP request
-                    char *space_pos = strchr(request, ' ');
-                    if (space_pos) {
-                        // Extract method
-                        int method_len = space_pos - request;
-                        if (method_len > 0 && method_len < 16) {
-                            strncpy(entry->method, request, method_len);
-                            entry->method[method_len] = '\0';
+                    // Check if this is a non-HTTP command (like quit, help, etc.)
+                    const char *non_http_commands[] = {"quit", "exit", "help", "user", "pass", "list", "retr", "stor", "dele", "pwd", "cwd", "mkd", "rmd", "noop", "syst", "feat", "auth", "pbsz", "prot", NULL};
+                    int is_non_http = 0;
+                    
+                    for (int i = 0; non_http_commands[i] != NULL; i++) {
+                        if (strncasecmp(request, non_http_commands[i], strlen(non_http_commands[i])) == 0) {
+                            snprintf(entry->method, sizeof(entry->method), "NON_HTTP:%s", non_http_commands[i]);
+                            strncpy(entry->url, request, sizeof(entry->url) - 1);
+                            entry->url[sizeof(entry->url) - 1] = '\0';
+                            is_non_http = 1;
+                            
+                            if (debug_mode) {
+                                printf("DEBUG: Non-HTTP command detected: %s\n", non_http_commands[i]);
+                            }
+                            break;
                         }
-                        
-                        // Extract URL
-                        char *url_start = space_pos + 1;
-                        char *url_end = strchr(url_start, ' ');
-                        if (url_end) {
-                            int url_len = url_end - url_start;
-                            if (url_len > 0 && url_len < MAX_URL_LENGTH) {
-                                strncpy(entry->url, url_start, url_len);
-                                entry->url[url_len] = '\0';
+                    }
+                    
+                    if (!is_non_http) {
+                        // Regular HTTP request or unknown command
+                        char *space_pos = strchr(request, ' ');
+                        if (space_pos) {
+                            // Extract method
+                            int method_len = space_pos - request;
+                            if (method_len > 0 && method_len < 16) {
+                                strncpy(entry->method, request, method_len);
+                                entry->method[method_len] = '\0';
+                            }
+                            
+                            // Extract URL
+                            char *url_start = space_pos + 1;
+                            char *url_end = strchr(url_start, ' ');
+                            if (url_end) {
+                                int url_len = url_end - url_start;
+                                if (url_len > 0 && url_len < MAX_URL_LENGTH) {
+                                    strncpy(entry->url, url_start, url_len);
+                                    entry->url[url_len] = '\0';
+                                }
+                            } else {
+                                // No space found, use rest of request as URL
+                                strncpy(entry->url, url_start, sizeof(entry->url) - 1);
+                                entry->url[sizeof(entry->url) - 1] = '\0';
                             }
                         } else {
-                            // No space found, use rest of request as URL
-                            strncpy(entry->url, url_start, sizeof(entry->url) - 1);
-                            entry->url[sizeof(entry->url) - 1] = '\0';
+                            // No space in request, treat entire request as method
+                            strncpy(entry->method, request, sizeof(entry->method) - 1);
+                            entry->method[sizeof(entry->method) - 1] = '\0';
+                            strcpy(entry->url, "/");
                         }
-                    } else {
-                        // No space in request, treat entire request as method
-                        strncpy(entry->method, request, sizeof(entry->method) - 1);
-                        entry->method[sizeof(entry->method) - 1] = '\0';
-                        strcpy(entry->url, "/");
                     }
                 }
                 
@@ -1221,7 +1273,27 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                 if (quote_end != line + strlen(line)) {
                     char *status_start = quote_end + 1;
                     while (*status_start == ' ') status_start++; // Skip spaces
-                    entry->status = atoi(status_start);
+                    
+                    // Check if status is "-" (unknown/incomplete)
+                    if (*status_start == '-' && (*(status_start + 1) == ' ' || *(status_start + 1) == '\0' || *(status_start + 1) == '\n')) {
+                        entry->status = 0; // Use 0 to indicate unknown status
+                        entry->size = 0;
+                    } else {
+                        // Try to parse status code
+                        int potential_status = atoi(status_start);
+                        
+                        // Check if it's a valid HTTP status code (100-599)
+                        if (potential_status >= 100 && potential_status <= 599) {
+                            entry->status = potential_status;
+                        } else {
+                            // If not a valid status code, it might be size - default to 200
+                            entry->status = 200;
+                            // Store the number as size if it's reasonable
+                            if (potential_status > 0 && potential_status < 1000000) {
+                                entry->size = potential_status;
+                            }
+                        }
+                    }
                 } else {
                     entry->status = 200; // Default status if not found
                 }
@@ -2089,12 +2161,34 @@ static int process_log_file(const char *filename) {
             }
             
             // Check for empty requests (potential attack or malformed requests)
-            if (strcmp(entry.method, "EMPTY") == 0) {
+            if (strcmp(entry.method, "EMPTY") == 0 || strcmp(entry.method, "SSL_EMPTY") == 0) {
                 record_suspicious_ip(entry.ip, "空のHTTPリクエスト", 1);
                 detected++;
                 if (debug_mode) {
-                    printf("DEBUG: Empty HTTP request detected - IP: %s, Status: %d\n", 
+                    printf("DEBUG: Empty %s request detected - IP: %s, Status: %d\n", 
+                           strcmp(entry.method, "SSL_EMPTY") == 0 ? "SSL" : "HTTP",
                            entry.ip, entry.status);
+                }
+            }
+            
+            // Check for incomplete requests (potential timeout or connection issues)
+            if (strcmp(entry.method, "INCOMPLETE") == 0 || strcmp(entry.method, "SSL_INCOMPLETE") == 0) {
+                record_suspicious_ip(entry.ip, "不完全なHTTPリクエスト", 1);
+                detected++;
+                if (debug_mode) {
+                    printf("DEBUG: Incomplete %s request detected - IP: %s, Status: %d\n", 
+                           strcmp(entry.method, "SSL_INCOMPLETE") == 0 ? "SSL" : "HTTP",
+                           entry.ip, entry.status);
+                }
+            }
+            
+            // Check for non-HTTP commands (potential protocol tunneling or misuse)
+            if (strncmp(entry.method, "NON_HTTP:", 9) == 0) {
+                record_suspicious_ip(entry.ip, "非HTTPプロトコル使用", 1);
+                detected++;
+                if (debug_mode) {
+                    printf("DEBUG: Non-HTTP command detected - IP: %s, Command: %s, Status: %d\n", 
+                           entry.ip, entry.method, entry.status);
                 }
             }
             
@@ -2108,6 +2202,22 @@ static int process_log_file(const char *filename) {
                 if (entry.status >= 400) {
                     record_suspicious_ip(entry.ip, "JSON-RPC攻撃試行", 1);
                     detected++;
+                }
+            }
+            
+            // Check for deprecated SSL protocols (security concern)
+            // This is detected by checking if the line contains SSLv3, SSLv2, or TLSv1.0
+            if (strstr(line, "SSLv3") || strstr(line, "SSLv2") || strstr(line, "TLSv1 ")) {
+                const char* protocol = "Unknown";
+                if (strstr(line, "SSLv3")) protocol = "SSLv3";
+                else if (strstr(line, "SSLv2")) protocol = "SSLv2";
+                else if (strstr(line, "TLSv1 ")) protocol = "TLSv1.0";
+                
+                record_suspicious_ip(entry.ip, "非推奨SSL/TLSプロトコル使用", 1);
+                detected++;
+                if (debug_mode) {
+                    printf("DEBUG: Deprecated SSL/TLS protocol detected - IP: %s, Protocol: %s\n", 
+                           entry.ip, protocol);
                 }
             }
             
