@@ -2244,11 +2244,13 @@ static int process_log_file(const char *filename) {
     
     stats.end_time = time(NULL);
     
-    if (verbose_mode) {
+    if (verbose_mode || debug_mode) {
         printf("\nProcessing complete!\n");
         printf("Total lines: %d, Processed: %d, Skipped: %d\n", 
                line_count, processed_count, stats.skipped_lines);
         printf("Processing time: %ld seconds\n", stats.end_time - start_time);
+        printf("Stats - Total: %d, Processed: %d, Start: %ld, End: %ld\n",
+               stats.total_lines, stats.processed_lines, stats.start_time, stats.end_time);
     }
     
     fclose(file);
@@ -2301,7 +2303,12 @@ static void generate_report(void) {
     printf("解析実行時刻: %s\n", timestamp ? timestamp : "Unknown");
     printf("解析対象: 複数ログ形式対応 (C実装版)\n");
     printf("地理位置検索: %s\n", enable_geo_lookup ? "有効" : "無効");
-    printf("処理時間: %ld秒\n", stats.end_time - stats.start_time);
+    double processing_time_display = (double)(stats.end_time - stats.start_time);
+    if (processing_time_display < 1.0) {
+        printf("処理時間: < 1秒 (高速処理)\n");
+    } else {
+        printf("処理時間: %.0f秒\n", processing_time_display);
+    }
     printf("\n");
     
     // Display analysis statistics
@@ -2500,9 +2507,15 @@ static void generate_report(void) {
     
     printf("\n");
     printf("処理効率:\n");
-    printf("  - 処理速度: %.1f行/秒\n", 
-           (stats.end_time - stats.start_time) > 0 ? 
-           (stats.total_lines / (double)(stats.end_time - stats.start_time)) : 0.0);
+    double processing_time = (double)(stats.end_time - stats.start_time);
+    if (processing_time > 0) {
+        printf("  - 処理速度: %.1f行/秒 (総行数ベース)\n", 
+               stats.total_lines / processing_time);
+        printf("  - 解析速度: %.1f行/秒 (成功行数ベース)\n", 
+               stats.processed_lines / processing_time);
+    } else {
+        printf("  - 処理速度: 計算不可 (処理時間が短すぎます)\n");
+    }
     printf("  - 解析成功率: %.1f%%\n", 
            stats.total_lines > 0 ? (stats.processed_lines * 100.0 / stats.total_lines) : 0.0);
     printf("\n");
