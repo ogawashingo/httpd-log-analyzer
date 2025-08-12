@@ -49,6 +49,11 @@ static int enable_geo_lookup = 0;
 static int debug_mode = 0;
 static int verbose_mode = 0;
 
+// Log type tracking
+static int has_access_log = 0;
+static int has_error_log = 0;
+static int has_ssl_log = 0;
+
 // Data structures
 typedef struct {
     char ip[MAX_IP_LENGTH];
@@ -863,6 +868,15 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
     
     // Detect log type for this line
     const char *log_type = detect_line_log_type(line);
+    
+    // Track log types encountered
+    if (strcmp(log_type, "access_log") == 0) {
+        has_access_log = 1;
+    } else if (strcmp(log_type, "error_log") == 0) {
+        has_error_log = 1;
+    } else if (strcmp(log_type, "ssl_request_log") == 0) {
+        has_ssl_log = 1;
+    }
     
     if (debug_mode) {
         printf("DEBUG: Detected log type '%s' for line: %.100s\n", log_type, line);
@@ -2332,7 +2346,31 @@ static void generate_report(void) {
         return;
     }
     
-    printf("疑わしいIPアドレスが検出されました (access_log 解析結果):\n");
+    // Generate dynamic log type description
+    char log_type_desc[128] = "";
+    int type_count = 0;
+    
+    if (has_access_log) {
+        if (type_count > 0) strcat(log_type_desc, ", ");
+        strcat(log_type_desc, "access_log");
+        type_count++;
+    }
+    if (has_error_log) {
+        if (type_count > 0) strcat(log_type_desc, ", ");
+        strcat(log_type_desc, "error_log");
+        type_count++;
+    }
+    if (has_ssl_log) {
+        if (type_count > 0) strcat(log_type_desc, ", ");
+        strcat(log_type_desc, "ssl_request_log");
+        type_count++;
+    }
+    
+    if (strlen(log_type_desc) == 0) {
+        strcpy(log_type_desc, "混合ログ");
+    }
+    
+    printf("疑わしいIPアドレスが検出されました (%s 解析結果):\n", log_type_desc);
     printf("----------------------------------------\n");
     
     // Count threat types and calculate statistics
@@ -2344,15 +2382,10 @@ static void generate_report(void) {
     
     threat_summary_t threat_summary[20] = {0};
     int threat_types = 0;
-    int high_priority = 0, medium_priority = 0, low_priority = 0;
     
     // Analyze threat types
     for (int i = 0; i < suspicious_ips.count; i++) {
         int priority = get_threat_priority(suspicious_ips.ips[i].reason);
-        
-        if (priority >= 8) high_priority++;
-        else if (priority >= 5) medium_priority++;
-        else low_priority++;
         
         // Find or create threat type entry
         int found = 0;
@@ -2452,73 +2485,7 @@ static void generate_report(void) {
     printf("--------------------------------------------------------------------------------------------------------\n");
     printf("\n");
     
-    printf("優先度・検出元説明:\n");
-    printf("  [高] - 即座に対応が必要な重大な脅威 (SQLインジェクション、WAF攻撃ブロック、ブルートフォース)\n");
-    printf("  [中] - 監視が必要な中程度の脅威 (高頻度アクセス、偵察活動、権限昇格試行)\n");
-    printf("  [低] - 注意が必要な軽微な脅威 (アクセス制御違反、その他の異常パターン)\n");
-    printf("\n");
-    
-    printf("  [access_log検出] - アクセスログから検出された脅威\n");
-    printf("  [error_log検出] - エラーログから検出された脅威\n");
-    printf("  [ssl_request_log検出] - SSL/TLSリクエストログから検出された脅威\n");
-    printf("\n");
-    
-    printf("レポート生成完了: %s\n", ctime(&now));
-    printf("総検出IP数: %d個\n", suspicious_ips.count);
-    
-    // Calculate detection rate
-    double detection_rate = 0.0;
-    if (stats.processed_lines > 0) {
-        detection_rate = (suspicious_ips.count * 100.0) / stats.processed_lines;
-    }
-    printf("検出率: %.2f%% (%d個のIP / %d行の解析済みログ)\n", 
-           detection_rate, suspicious_ips.count, stats.processed_lines);
-    
-    // Detailed summary
-    printf("\n");
-    printf("脅威検出統計:\n");
-    printf("  - 高優先度脅威: %d件\n", high_priority);
-    printf("  - 中優先度脅威: %d件\n", medium_priority);
-    printf("  - 低優先度脅威: %d件\n", low_priority);
-    
-    // Count by specific attack type
-    int sql_injection = 0, traversal = 0, high_freq = 0, errors_4xx = 0, auth_failures = 0, error_log_threats = 0;
-    for (int i = 0; i < suspicious_ips.count; i++) {
-        if (strstr(suspicious_ips.ips[i].reason, "SQLインジェクション")) sql_injection++;
-        if (strstr(suspicious_ips.ips[i].reason, "トラバーサル")) traversal++;
-        if (strstr(suspicious_ips.ips[i].reason, "高頻度")) high_freq++;
-        if (strstr(suspicious_ips.ips[i].reason, "認証失敗")) auth_failures++;
-        if (strstr(suspicious_ips.ips[i].reason, "WAF") || 
-            strstr(suspicious_ips.ips[i].reason, "ModSecurity") ||
-            strstr(suspicious_ips.ips[i].reason, "権限拒否") ||
-            strstr(suspicious_ips.ips[i].reason, "error_log")) error_log_threats++;
-        if (strstr(suspicious_ips.ips[i].reason, "エラー") || 
-            strstr(suspicious_ips.ips[i].reason, "404") ||
-            strstr(suspicious_ips.ips[i].reason, "403") ||
-            strstr(suspicious_ips.ips[i].reason, "401")) errors_4xx++;
-    }
-    
-    printf("  - SQLインジェクション攻撃: %d件\n", sql_injection);
-    printf("  - ディレクトリトラバーサル攻撃: %d件\n", traversal);
-    printf("  - 高頻度アクセス: %d件\n", high_freq);
-    printf("  - 認証失敗パターン: %d件\n", auth_failures);
-    printf("  - 4xx系エラーパターン: %d件\n", errors_4xx);
-    printf("  - error_log脅威: %d件\n", error_log_threats);
-    
-    printf("\n");
-    printf("処理効率:\n");
-    double processing_time = (double)(stats.end_time - stats.start_time);
-    if (processing_time > 0) {
-        printf("  - 処理速度: %.1f行/秒 (総行数ベース)\n", 
-               stats.total_lines / processing_time);
-        printf("  - 解析速度: %.1f行/秒 (成功行数ベース)\n", 
-               stats.processed_lines / processing_time);
-    } else {
-        printf("  - 処理速度: 計算不可 (処理時間が短すぎます)\n");
-    }
-    printf("  - 解析成功率: %.1f%%\n", 
-           stats.total_lines > 0 ? (stats.processed_lines * 100.0 / stats.total_lines) : 0.0);
-    printf("\n");
+
 }
 
 // Cleanup resources
