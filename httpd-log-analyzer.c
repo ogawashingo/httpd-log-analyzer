@@ -22,6 +22,7 @@
 #include <pthread.h>
 #include <regex.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <errno.h>
 #include <ctype.h>
 #include <curl/curl.h>
@@ -106,8 +107,8 @@ typedef struct {
     int total_lines;
     int processed_lines;
     int skipped_lines;
-    time_t start_time;
-    time_t end_time;
+    struct timeval start_time;
+    struct timeval end_time;
 } analysis_stats_t;
 
 // Global data structures
@@ -901,8 +902,10 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                 // Parse request method and URL
                 // Handle incomplete requests (marked as "-") and empty requests
                 if (strcmp(request, "-") == 0) {
-                    strcpy(entry->method, "INCOMPLETE");
-                    strcpy(entry->url, "-");
+                    strncpy(entry->method, "INCOMPLETE", sizeof(entry->method) - 1);
+                    entry->method[sizeof(entry->method) - 1] = '\0';
+                    strncpy(entry->url, "-", sizeof(entry->url) - 1);
+                    entry->url[sizeof(entry->url) - 1] = '\0';
                     
                     // Extract IP and username for incomplete requests too
                     char *line_copy = strdup(line);
@@ -925,7 +928,8 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                             strncpy(entry->username, username_token, sizeof(entry->username) - 1);
                             entry->username[sizeof(entry->username) - 1] = '\0';
                         } else {
-                            strcpy(entry->username, "-");
+                            strncpy(entry->username, "-", sizeof(entry->username) - 1);
+                            entry->username[sizeof(entry->username) - 1] = '\0';
                         }
                         
                         free(line_copy);
@@ -976,8 +980,9 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                     
                     return 1;
                 } else if (strcmp(request, "") == 0 || req_len == 0) {
-                    strcpy(entry->method, "EMPTY");
-                    strcpy(entry->url, "");
+                    strncpy(entry->method, "EMPTY", sizeof(entry->method) - 1);
+                    entry->method[sizeof(entry->method) - 1] = '\0';
+                    entry->url[0] = '\0';  // Empty string
                     
                     // Extract IP and username for empty requests too
                     char *line_copy = strdup(line);
@@ -1000,7 +1005,8 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                             strncpy(entry->username, username_token, sizeof(entry->username) - 1);
                             entry->username[sizeof(entry->username) - 1] = '\0';
                         } else {
-                            strcpy(entry->username, "-");
+                            strncpy(entry->username, "-", sizeof(entry->username) - 1);
+                            entry->username[sizeof(entry->username) - 1] = '\0';
                         }
                         
                         free(line_copy);
@@ -1072,7 +1078,8 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                             strncpy(entry->username, username_token, sizeof(entry->username) - 1);
                             entry->username[sizeof(entry->username) - 1] = '\0';
                         } else {
-                            strcpy(entry->username, "-");
+                            strncpy(entry->username, "-", sizeof(entry->username) - 1);
+                            entry->username[sizeof(entry->username) - 1] = '\0';
                         }
                         
                         free(line_copy);
@@ -1187,8 +1194,9 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                 // Parse request method and URL (be more flexible)
                 // Check if this is an empty request
                 if (strcmp(request, "") == 0 || req_len == 0) {
-                    strcpy(entry->method, "SSL_EMPTY");
-                    strcpy(entry->url, "");
+                    strncpy(entry->method, "SSL_EMPTY", sizeof(entry->method) - 1);
+                    entry->method[sizeof(entry->method) - 1] = '\0';
+                    entry->url[0] = '\0';  // Empty string
                     
                     if (debug_mode) {
                         printf("DEBUG: Empty SSL request detected\n");
@@ -1196,8 +1204,10 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                 }
                 // Check if this is an incomplete request (marked as "-")
                 else if (strcmp(request, "-") == 0) {
-                    strcpy(entry->method, "SSL_INCOMPLETE");
-                    strcpy(entry->url, "-");
+                    strncpy(entry->method, "SSL_INCOMPLETE", sizeof(entry->method) - 1);
+                    entry->method[sizeof(entry->method) - 1] = '\0';
+                    strncpy(entry->url, "-", sizeof(entry->url) - 1);
+                    entry->url[sizeof(entry->url) - 1] = '\0';
                     
                     if (debug_mode) {
                         printf("DEBUG: Incomplete SSL request detected\n");
@@ -1206,7 +1216,8 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                 // Check if this is a JSON payload (starts with '{')
                 else if (request[0] == '{') {
                     // JSON payload - extract method from JSON if possible
-                    strcpy(entry->method, "JSON-RPC");
+                    strncpy(entry->method, "JSON-RPC", sizeof(entry->method) - 1);
+                    entry->method[sizeof(entry->method) - 1] = '\0';
                     
                     // Try to extract method from JSON
                     char *method_pos = strstr(request, "\"method\":");
@@ -1278,7 +1289,8 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                             // No space in request, treat entire request as method
                             strncpy(entry->method, request, sizeof(entry->method) - 1);
                             entry->method[sizeof(entry->method) - 1] = '\0';
-                            strcpy(entry->url, "/");
+                            strncpy(entry->url, "/", sizeof(entry->url) - 1);
+                            entry->url[sizeof(entry->url) - 1] = '\0';
                         }
                     }
                 }
@@ -1474,8 +1486,10 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                 // Parse request method and URL
                 // Handle incomplete requests (marked as "-")
                 if (strcmp(request, "-") == 0) {
-                    strcpy(entry->method, "INCOMPLETE");
-                    strcpy(entry->url, "-");
+                    strncpy(entry->method, "INCOMPLETE", sizeof(entry->method) - 1);
+                    entry->method[sizeof(entry->method) - 1] = '\0';
+                    strncpy(entry->url, "-", sizeof(entry->url) - 1);
+                    entry->url[sizeof(entry->url) - 1] = '\0';
                 } else {
                     char *space_pos = strchr(request, ' ');
                     if (space_pos) {
@@ -1504,7 +1518,8 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
                         // No space in request, treat entire request as method
                         strncpy(entry->method, request, sizeof(entry->method) - 1);
                         entry->method[sizeof(entry->method) - 1] = '\0';
-                        strcpy(entry->url, "/");
+                        strncpy(entry->url, "/", sizeof(entry->url) - 1);
+                        entry->url[sizeof(entry->url) - 1] = '\0';
                     }
                 }
                 
@@ -1589,10 +1604,12 @@ static void record_suspicious_ip(const char *ip, const char *reason, int count) 
                 strncpy(new_ip->country, country, MAX_COUNTRY_LENGTH - 1);
                 free(country);
             } else {
-                strcpy(new_ip->country, "Unknown");
+                strncpy(new_ip->country, "Unknown", sizeof(new_ip->country) - 1);
+                new_ip->country[sizeof(new_ip->country) - 1] = '\0';
             }
         } else {
-            strcpy(new_ip->country, "N/A");
+            strncpy(new_ip->country, "N/A", sizeof(new_ip->country) - 1);
+            new_ip->country[sizeof(new_ip->country) - 1] = '\0';
         }
         
         suspicious_ips.count++;
@@ -2130,7 +2147,7 @@ static int process_log_file(const char *filename) {
     stats.total_lines = total_lines;
     stats.processed_lines = 0;
     stats.skipped_lines = 0;
-    stats.start_time = time(NULL);
+    gettimeofday(&stats.start_time, NULL);
     
     if (verbose_mode) {
         printf("Processing %d lines from %s\n", total_lines, filename);
@@ -2138,7 +2155,7 @@ static int process_log_file(const char *filename) {
                enable_geo_lookup ? "Enabled" : "Disabled");
     }
     
-    time_t start_time = stats.start_time;
+    struct timeval start_time = stats.start_time;
     
     while (fgets(line, sizeof(line), file)) {
         line_count++;
@@ -2256,15 +2273,19 @@ static int process_log_file(const char *filename) {
         }
     }
     
-    stats.end_time = time(NULL);
+    gettimeofday(&stats.end_time, NULL);
     
     if (verbose_mode || debug_mode) {
         printf("\nProcessing complete!\n");
         printf("Total lines: %d, Processed: %d, Skipped: %d\n", 
                line_count, processed_count, stats.skipped_lines);
-        printf("Processing time: %ld seconds\n", stats.end_time - start_time);
-        printf("Stats - Total: %d, Processed: %d, Start: %ld, End: %ld\n",
-               stats.total_lines, stats.processed_lines, stats.start_time, stats.end_time);
+        double processing_time = (stats.end_time.tv_sec - start_time.tv_sec) + 
+                                 (stats.end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        printf("Processing time: %.3f seconds\n", processing_time);
+        printf("Stats - Total: %d, Processed: %d, Start: %ld.%06ld, End: %ld.%06ld\n",
+               stats.total_lines, stats.processed_lines, 
+               stats.start_time.tv_sec, stats.start_time.tv_usec,
+               stats.end_time.tv_sec, stats.end_time.tv_usec);
     }
     
     fclose(file);
@@ -2317,11 +2338,14 @@ static void generate_report(void) {
     printf("解析実行時刻: %s\n", timestamp ? timestamp : "Unknown");
     printf("解析対象: 複数ログ形式対応 (C実装版)\n");
     printf("地理位置検索: %s\n", enable_geo_lookup ? "有効" : "無効");
-    double processing_time_display = (double)(stats.end_time - stats.start_time);
-    if (processing_time_display < 1.0) {
-        printf("処理時間: < 1秒 (高速処理)\n");
+    double processing_time_display = (stats.end_time.tv_sec - stats.start_time.tv_sec) + 
+                                     (stats.end_time.tv_usec - stats.start_time.tv_usec) / 1000000.0;
+    if (processing_time_display < 0.001) {
+        printf("処理時間: < 1ms (超高速処理)\n");
+    } else if (processing_time_display < 1.0) {
+        printf("処理時間: %.3f秒 (高速処理)\n", processing_time_display);
     } else {
-        printf("処理時間: %.0f秒\n", processing_time_display);
+        printf("処理時間: %.3f秒\n", processing_time_display);
     }
     printf("\n");
     
@@ -2349,25 +2373,33 @@ static void generate_report(void) {
     // Generate dynamic log type description
     char log_type_desc[128] = "";
     int type_count = 0;
+    int pos = 0;
     
     if (has_access_log) {
-        if (type_count > 0) strcat(log_type_desc, ", ");
-        strcat(log_type_desc, "access_log");
+        if (type_count > 0) {
+            pos += snprintf(log_type_desc + pos, sizeof(log_type_desc) - pos, ", ");
+        }
+        pos += snprintf(log_type_desc + pos, sizeof(log_type_desc) - pos, "access_log");
         type_count++;
     }
     if (has_error_log) {
-        if (type_count > 0) strcat(log_type_desc, ", ");
-        strcat(log_type_desc, "error_log");
+        if (type_count > 0) {
+            pos += snprintf(log_type_desc + pos, sizeof(log_type_desc) - pos, ", ");
+        }
+        pos += snprintf(log_type_desc + pos, sizeof(log_type_desc) - pos, "error_log");
         type_count++;
     }
     if (has_ssl_log) {
-        if (type_count > 0) strcat(log_type_desc, ", ");
-        strcat(log_type_desc, "ssl_request_log");
+        if (type_count > 0) {
+            pos += snprintf(log_type_desc + pos, sizeof(log_type_desc) - pos, ", ");
+        }
+        pos += snprintf(log_type_desc + pos, sizeof(log_type_desc) - pos, "ssl_request_log");
         type_count++;
     }
     
     if (strlen(log_type_desc) == 0) {
-        strcpy(log_type_desc, "混合ログ");
+        strncpy(log_type_desc, "不明なログ形式", sizeof(log_type_desc) - 1);
+        log_type_desc[sizeof(log_type_desc) - 1] = '\0';
     }
     
     printf("疑わしいIPアドレスが検出されました (%s 解析結果):\n", log_type_desc);
@@ -2387,11 +2419,10 @@ static void generate_report(void) {
     for (int i = 0; i < suspicious_ips.count; i++) {
         int priority = get_threat_priority(suspicious_ips.ips[i].reason);
         
-        // Find or create threat type entry
+        // Find or create threat type entry using exact string comparison
         int found = 0;
         for (int j = 0; j < threat_types; j++) {
-            if (strstr(suspicious_ips.ips[i].reason, threat_summary[j].name) ||
-                strstr(threat_summary[j].name, suspicious_ips.ips[i].reason)) {
+            if (strcmp(suspicious_ips.ips[i].reason, threat_summary[j].name) == 0) {
                 threat_summary[j].count++;
                 found = 1;
                 break;
@@ -2472,7 +2503,8 @@ static void generate_report(void) {
         if (suspicious_ips.ips[i].count > 0) {
             snprintf(count_display, sizeof(count_display), "%d回", suspicious_ips.ips[i].count);
         } else {
-            strcpy(count_display, "-");
+            strncpy(count_display, "-", sizeof(count_display) - 1);
+            count_display[sizeof(count_display) - 1] = '\0';
         }
         
         printf("%-16s %-8s %-60s %-20s\n",
