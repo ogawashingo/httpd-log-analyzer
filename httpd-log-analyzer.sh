@@ -52,29 +52,184 @@ VERBOSE_OUTPUT=false
 DEBUG_MODE=false
 PERFORMANCE_MODE=true
 
+# パフォーマンス最適化設定
+CHUNK_SIZE=1000                # チャンクサイズ（行数）
+
 # SQLインジェクション検出パターン（大文字小文字を区別しない）
 declare -a SQL_INJECTION_PATTERNS=(
+    # Classic SQL injection
     "union.*select"
     "drop.*table"
     "insert.*into"
     "update.*set"
     "delete.*from"
+    
+    # XSS patterns
     "script.*alert"
     "javascript:"
     "onload="
     "onerror="
+    
+    # URL encoded SQL injection
     "%27.*union"     # URLエンコードされた ' union
     "%22.*select"    # URLエンコードされた " select
     "%3c.*script"    # URLエンコードされた < script
     "%3e"            # URLエンコードされた >
+    
+    # Database-specific attacks
     "exec.*xp_"      # SQL Server拡張プロシージャ
     "sp_.*password"  # SQL Serverストアドプロシージャ
     "information_schema"
     "mysql.*user"
     "pg_.*user"      # PostgreSQLシステムテーブル
+    
+    # Time-based attacks
     "waitfor.*delay" # SQL Server時間遅延
     "benchmark.*("   # MySQLベンチマーク関数
     "sleep.*("       # MySQLスリープ関数
+    "pg_sleep.*("    # PostgreSQL sleep
+    
+    # Advanced SQL injection techniques
+    "extractvalue.*("
+    "updatexml.*("
+    "exp.*("
+    "floor.*rand.*("
+    "count.*\\*.*group.*by"
+    "having.*("
+    "procedure.*analyse"
+    "load_file.*("
+    "into.*outfile"
+    "into.*dumpfile"
+    
+    # Boolean-based blind SQL injection
+    "and.*1=1"
+    "and.*1=2"
+    "or.*1=1"
+    "or.*1=2"
+    "%20and%201=1"
+    "%20or%201=1"
+    
+    # Union-based advanced patterns
+    "union.*all.*select"
+    "union.*select.*null"
+    "union.*select.*from"
+    "order.*by.*[0-9]+"
+    
+    # Comment-based evasion
+    "/\*.*\*/"
+    "--.*"
+    "#.*"
+    "%2d%2d"
+    "%2f%2a"
+    
+    # NoSQL injection patterns (C版拡張)
+    "\\$ne.*:"
+    "\\$gt.*:"
+    "\\$lt.*:"
+    "\\$regex.*:"
+    "\\$where.*:"
+    "\\$or.*\\["
+    "\\$and.*\\["
+    "\\$in.*\\["
+    "\\$nin.*\\["
+    "\\$exists.*:"
+    "\\$type.*:"
+    "\\$mod.*\\["
+    "\\$all.*\\["
+    "\\$size.*:"
+    "\\$elemMatch.*\\{"
+    
+    # WAF bypass techniques (C版拡張)
+    "/\*!.*select"
+    "/\*!.*union"
+    "select.*\+.*from"
+    "uni%6fn.*sel%65ct"
+    "0x.*select"
+    "char.*\("
+    "concat.*\("
+    "ascii.*\("
+    "substring.*\("
+    "mid.*\("
+    "left.*\("
+    "right.*\("
+    "hex.*\("
+    "unhex.*\("
+    "bin.*\("
+    "oct.*\("
+    
+    # Double encoding (C版拡張)
+    "%2527"
+    "%252f"
+    "%253c"
+    "%253e"
+    "%2520"
+    "%2522"
+    "%2528"
+    "%2529"
+    
+    # Alternative representations (C版拡張)
+    "sel%65ct"
+    "un%69on"
+    "fr%6fm"
+    "wh%65re"
+    "ins%65rt"
+    "del%65te"
+    "up%64ate"
+    "dr%6fp"
+    
+    # LDAP injection (C版拡張)
+    "\*\)\("
+    "\)\(&"
+    "\|\("
+    "\\&\("
+    "\\!\("
+    "\\=\*"
+    "\\~\\="
+    "\\>\\="
+    "\\<\\="
+    
+    # XML injection (C版拡張)
+    "<!entity"
+    "<!\[cdata"
+    "<!doctype"
+    "&lt;!entity"
+    "&lt;!\[cdata"
+    "%3c!entity"
+    "%3c!%5bcdata"
+    
+    # Advanced SQL functions (C版新規追加)
+    "database.*\("
+    "version.*\("
+    "user.*\("
+    "current_user.*\("
+    "system_user.*\("
+    "session_user.*\("
+    "@@version"
+    "@@user"
+    "@@hostname"
+    "@@datadir"
+    
+    # Time-based advanced patterns (C版新規追加)
+    "if.*\(.*sleep"
+    "case.*when.*sleep"
+    "elt.*\(.*sleep"
+    "make_set.*\(.*sleep"
+    "greatest.*\(.*sleep"
+    
+    # Error-based advanced patterns (C版新規追加)
+    "geometrycollection.*\("
+    "multipoint.*\("
+    "polygon.*\("
+    "multipolygon.*\("
+    "linestring.*\("
+    "multilinestring.*\("
+    
+    # Blind SQL injection advanced (C版新規追加)
+    "ascii.*\(.*substr"
+    "ord.*\(.*substr"
+    "hex.*\(.*substr"
+    "bin.*\(.*substr"
+    "length.*\(.*substr"
 )
 
 # 例と攻撃パターンを含む詳細な使用方法情報を表示する関数
@@ -87,6 +242,7 @@ show_usage() {
     echo "オプション:"
     echo "  --enable-geo      地理位置検索を有効にします（デフォルトは無効）"
     echo "  --detailed-mode   詳細な攻撃パターン検出を有効にします（デフォルトは高速モード）"
+    echo "  --chunk-size N    チャンクサイズを指定（行数、デフォルト: 1000）"
     echo "  --debug           デバッグ出力を有効にします（詳細な検出ログ）"
     echo "  --verbose         詳細な処理情報を表示します"
     echo "  -h, --help        このヘルプメッセージを表示します"
@@ -95,6 +251,7 @@ show_usage() {
     echo "  $0 /var/log/apache2/access.log"
     echo "  $0 --enable-geo /var/log/nginx/access.log"
     echo "  $0 --detailed-mode ./test_access.log"
+    echo "  $0 --chunk-size 2000 /var/log/apache2/large_access.log"
     echo "  $0 --enable-geo --detailed-mode /var/log/apache2/access.log"
     echo ""
     echo "検出される攻撃パターン:"
@@ -248,8 +405,8 @@ validate_log_format() {
         ((total_checked++))
         
         # access_log形式をチェック（Common Log FormatまたはCombined Log Format）
-        # パターン: IP - - [timestamp] "request" status size [optional fields]
-        if [[ "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+.*-.*-.*\[.*\].*\".*\".*[0-9]+.*[0-9-]+ ]]; then
+        # パターン: IP - username [timestamp] "request" status size [optional fields]
+        if [[ "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+.*-.*([^[:space:]]+|\"[^\"]*\").*\[.*\].*\".*\".*[0-9]+.*[0-9-]+ ]]; then
             ((valid_entries++))
         # Apache error_log形式をチェック
         # パターン: [timestamp] [level] [pid] [client IP:port] message
@@ -305,9 +462,9 @@ validate_log_format() {
     echo "" >&2
 }
 
-# ログエントリを解析してコンポーネントを抽出する関数
-# Common Log FormatとCombined Log Formatの両方をサポート
-# 最適化: パフォーマンス向上とメモリ使用量削減
+# C版完全互換のログエントリ解析関数
+# access_log, error_log, ssl_request_log, timestamp_first_access_logの統合サポート
+# JSON-RPC、Non-HTTPコマンド、不完全リクエスト、空リクエストの完全対応
 parse_log_entry() {
     local log_line="$1"
     local line_number="${2:-unknown}"
@@ -335,83 +492,334 @@ parse_log_entry() {
     LOG_SIZE=""
     LOG_METHOD=""
     LOG_URL=""
+    LOG_USERNAME=""
     
-    # パフォーマンス向上のためawkの代わりにbash組み込み機能を使用した最適化された解析
-    # IP抽出（最初のフィールド） - 単純な抽出ではawkより高速
-    LOG_IP="${log_line%% *}"
+    # ログタイプを自動検出
+    local log_type=$(detect_line_log_type "$log_line")
     
-    # 基本的なIP検証
-    if [[ ! $LOG_IP =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        # 出力オーバーヘッドを削減するため100エラーごとに警告を表示
-        if (( line_number % 100 == 1 )); then
-            echo "Warning: Invalid IP format at line $line_number: ${log_line:0:80}..." >&2
-        fi
-        return 1
+    if [ "$DEBUG_MODE" = true ]; then
+        echo "DEBUG: Detected log type '$log_type' for line: ${log_line:0:100}" >&2
     fi
     
-    # タイムスタンプ抽出（[と]の間） - 最適化された正規表現
-    if [[ $log_line =~ \[([^\]]+)\] ]]; then
-        LOG_TIMESTAMP="${BASH_REMATCH[1]}"
-    else
-        if (( line_number % 100 == 1 )); then
-            echo "Warning: Invalid timestamp at line $line_number: ${log_line:0:80}..." >&2
-        fi
-        return 1
-    fi
-    
-    # リクエスト抽出（引用符の間） - パフォーマンス最適化
-    if [[ $log_line =~ \"([^\"]+)\" ]]; then
-        LOG_REQUEST="${BASH_REMATCH[1]}"
-    else
-        if (( line_number % 100 == 1 )); then
-            echo "Warning: Invalid request at line $line_number: ${log_line:0:80}..." >&2
-        fi
-        return 1
-    fi
-    
-    # 最適化されたアプローチを使用してステータスとサイズを抽出
-    # 引用符で囲まれたリクエストの後の部分を見つける
-    local after_request="${log_line#*\"$LOG_REQUEST\"}"
-    after_request="${after_request# }"  # 先頭のスペースを削除
-    
-    # ステータス抽出（リクエスト後の最初のフィールド）
-    LOG_STATUS="${after_request%% *}"
-    
-    # 基本的なステータス検証
-    if [[ ! $LOG_STATUS =~ ^[0-9]{3}$ ]]; then
-        if (( line_number % 100 == 1 )); then
-            echo "Warning: Invalid status code at line $line_number: $LOG_STATUS" >&2
-        fi
-        return 1
-    fi
-    
-    # サイズ抽出（リクエスト後の2番目のフィールド） - パフォーマンスのためオプション
-    after_request="${after_request#$LOG_STATUS }"
-    LOG_SIZE="${after_request%% *}"
-    
-    # リクエストからHTTPメソッドとURLを抽出 - 最適化
-    if [[ $LOG_REQUEST =~ ^([A-Z]+)[[:space:]]+([^[:space:]]+) ]]; then
-        LOG_METHOD="${BASH_REMATCH[1]}"
-        LOG_URL="${BASH_REMATCH[2]}"
-        
-        # URL長の制限（セキュリティとパフォーマンス向上）
-        if [ ${#LOG_URL} -gt $MAX_URL_LENGTH ]; then
-            if (( line_number % 1000 == 1 )); then
-                echo "Warning: URL too long at line $line_number (${#LOG_URL} chars), truncating..." >&2
+    if [ "$log_type" = "access_log" ]; then
+        # access_log形式の解析（C版完全互換）
+        # 引用符で囲まれたリクエスト部分を検索
+        if [[ $log_line =~ \"([^\"]*)\" ]]; then
+            LOG_REQUEST="${BASH_REMATCH[1]}"
+            
+            # IP、ユーザー名を抽出（strtokと同等の処理）
+            local fields=($log_line)
+            LOG_IP="${fields[0]}"
+            
+            # ユーザー名の抽出（3番目のフィールド）
+            if [ ${#fields[@]} -ge 3 ] && [ "${fields[2]}" != "-" ] && [ "${fields[2]}" != '""' ]; then
+                LOG_USERNAME="${fields[2]}"
+                # 引用符を削除
+                if [[ "$LOG_USERNAME" =~ ^\".*\"$ ]]; then
+                    LOG_USERNAME="${LOG_USERNAME:1:-1}"
+                fi
+            else
+                LOG_USERNAME="-"
             fi
-            LOG_URL="${LOG_URL:0:$MAX_URL_LENGTH}"
+            
+            # タイムスタンプ抽出（[と]の間）
+            if [[ $log_line =~ \[([^\]]+)\] ]]; then
+                LOG_TIMESTAMP="${BASH_REMATCH[1]}"
+            fi
+            
+            # ステータスとサイズを抽出（引用符の後）
+            local after_request="${log_line#*\"$LOG_REQUEST\"}"
+            after_request="${after_request# }"  # 先頭のスペースを削除
+            
+            local status_size_fields=($after_request)
+            if [ ${#status_size_fields[@]} -ge 1 ]; then
+                LOG_STATUS="${status_size_fields[0]}"
+            fi
+            if [ ${#status_size_fields[@]} -ge 2 ]; then
+                LOG_SIZE="${status_size_fields[1]}"
+                [ "$LOG_SIZE" = "-" ] && LOG_SIZE="0"
+            fi
+            
+            # リクエストの内容を解析（C版と同じロジック）
+            if [ "$LOG_REQUEST" = "-" ]; then
+                # 不完全リクエスト
+                LOG_METHOD="INCOMPLETE"
+                LOG_URL="-"
+            elif [ -z "$LOG_REQUEST" ]; then
+                # 空リクエスト
+                LOG_METHOD="EMPTY"
+                LOG_URL=""
+            else
+                # 通常のリクエスト解析
+                if [[ $LOG_REQUEST =~ ^([A-Z]+)[[:space:]]+([^[:space:]]+) ]]; then
+                    LOG_METHOD="${BASH_REMATCH[1]}"
+                    LOG_URL="${BASH_REMATCH[2]}"
+                    
+                    # URL長の制限
+                    if [ ${#LOG_URL} -gt $MAX_URL_LENGTH ]; then
+                        if (( line_number % 1000 == 1 )); then
+                            echo "Warning: URL too long at line $line_number (${#LOG_URL} chars), truncating..." >&2
+                        fi
+                        LOG_URL="${LOG_URL:0:$MAX_URL_LENGTH}"
+                    fi
+                else
+                    # HTTPメソッドが見つからない場合
+                    LOG_METHOD="UNKNOWN"
+                    LOG_URL="$LOG_REQUEST"
+                fi
+            fi
+            
+            # 基本的な検証
+            if [[ ! $LOG_IP =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                if (( line_number % 100 == 1 )); then
+                    echo "Warning: Invalid IP format at line $line_number: ${log_line:0:80}..." >&2
+                fi
+                return 1
+            fi
+            
+            if [[ ! $LOG_STATUS =~ ^[0-9]{3}$ ]]; then
+                if (( line_number % 100 == 1 )); then
+                    echo "Warning: Invalid status code at line $line_number: $LOG_STATUS" >&2
+                fi
+                return 1
+            fi
+            
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Successfully parsed access_log - IP: $LOG_IP, Username: $LOG_USERNAME, Method: $LOG_METHOD, URL: ${LOG_URL:0:50}..., Status: $LOG_STATUS" >&2
+            fi
+            
+            return 0
+        else
+            if (( line_number % 100 == 1 )); then
+                echo "Warning: No quoted request found at line $line_number: ${log_line:0:80}..." >&2
+            fi
+            return 1
         fi
-    else
-        # 不正な形式のリクエストを適切に処理
-        LOG_METHOD="UNKNOWN"
-        LOG_URL="$LOG_REQUEST"
-        # パフォーマンスのため警告頻度を削減
-        if (( line_number % 500 == 1 )); then
-            echo "Warning: Could not parse HTTP method/URL at line $line_number" >&2
+        
+    elif [ "$log_type" = "ssl_request_log" ]; then
+        # ssl_request_log形式の解析（C版完全互換）
+        if [ "$DEBUG_MODE" = true ]; then
+            echo "DEBUG: Parsing ssl_request_log line: ${log_line:0:200}" >&2
+        fi
+        
+        # IPアドレス抽出（]の後の最初のフィールド）
+        if [[ $log_line =~ ^\[([^\]]+)\][[:space:]]+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            LOG_TIMESTAMP="${BASH_REMATCH[1]}"
+            LOG_IP="${BASH_REMATCH[2]}"
+            
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Extracted IP: '$LOG_IP'" >&2
+            fi
+        fi
+        
+        # 引用符で囲まれたリクエスト部分を検索
+        if [[ $log_line =~ \"([^\"]*)\" ]]; then
+            LOG_REQUEST="${BASH_REMATCH[1]}"
+            
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Extracted request: '$LOG_REQUEST'" >&2
+            fi
+            
+            # リクエストの内容を解析
+            if [ -z "$LOG_REQUEST" ]; then
+                # 空リクエスト
+                LOG_METHOD="SSL_EMPTY"
+                LOG_URL=""
+                if [ "$DEBUG_MODE" = true ]; then
+                    echo "DEBUG: Empty SSL request detected" >&2
+                fi
+            elif [ "$LOG_REQUEST" = "-" ]; then
+                # 不完全リクエスト
+                LOG_METHOD="SSL_INCOMPLETE"
+                LOG_URL="-"
+                if [ "$DEBUG_MODE" = true ]; then
+                    echo "DEBUG: Incomplete SSL request detected" >&2
+                fi
+            elif [[ "$LOG_REQUEST" =~ ^\{ ]]; then
+                # JSON payload
+                LOG_METHOD="JSON-RPC"
+                
+                # JSONからメソッドを抽出
+                if [[ $LOG_REQUEST =~ \"method\":\"([^\"]+)\" ]]; then
+                    LOG_METHOD="JSON:${BASH_REMATCH[1]}"
+                fi
+                
+                LOG_URL="$LOG_REQUEST"
+                if [ ${#LOG_URL} -gt $MAX_URL_LENGTH ]; then
+                    LOG_URL="${LOG_URL:0:$MAX_URL_LENGTH}"
+                fi
+            else
+                # Non-HTTPコマンドのチェック
+                local non_http_commands=("quit" "exit" "help" "user" "pass" "list" "retr" "stor" "dele" "pwd" "cwd" "mkd" "rmd" "noop" "syst" "feat" "auth" "pbsz" "prot")
+                local is_non_http=false
+                
+                for cmd in "${non_http_commands[@]}"; do
+                    if [[ "$LOG_REQUEST" =~ ^$cmd ]]; then
+                        LOG_METHOD="NON_HTTP:$cmd"
+                        LOG_URL="$LOG_REQUEST"
+                        is_non_http=true
+                        if [ "$DEBUG_MODE" = true ]; then
+                            echo "DEBUG: Non-HTTP command detected: $cmd" >&2
+                        fi
+                        break
+                    fi
+                done
+                
+                if [ "$is_non_http" = false ]; then
+                    # 通常のHTTPリクエストまたは不明なコマンド
+                    if [[ $LOG_REQUEST =~ ^([A-Z]+)[[:space:]]+([^[:space:]]+) ]]; then
+                        LOG_METHOD="${BASH_REMATCH[1]}"
+                        LOG_URL="${BASH_REMATCH[2]}"
+                    elif [[ $LOG_REQUEST =~ ^([^[:space:]]+) ]]; then
+                        LOG_METHOD="${BASH_REMATCH[1]}"
+                        LOG_URL="/"
+                    else
+                        LOG_METHOD="UNKNOWN"
+                        LOG_URL="$LOG_REQUEST"
+                    fi
+                fi
+            fi
+            
+            # ステータスコード抽出（引用符の後）
+            local after_request="${log_line#*\"$LOG_REQUEST\"}"
+            if [[ $after_request =~ [[:space:]]+([0-9]{3}|-)([[:space:]]|$) ]]; then
+                if [ "${BASH_REMATCH[1]}" = "-" ]; then
+                    LOG_STATUS="0"
+                else
+                    LOG_STATUS="${BASH_REMATCH[1]}"
+                fi
+            else
+                # ステータスが見つからない場合、数値を探す
+                if [[ $after_request =~ [[:space:]]+([0-9]+) ]]; then
+                    local potential_status="${BASH_REMATCH[1]}"
+                    if [ $potential_status -ge 100 ] && [ $potential_status -le 599 ]; then
+                        LOG_STATUS="$potential_status"
+                    else
+                        LOG_STATUS="200"
+                        LOG_SIZE="$potential_status"
+                    fi
+                else
+                    LOG_STATUS="200"
+                fi
+            fi
+            
+            LOG_SIZE="${LOG_SIZE:-0}"
+            LOG_USERNAME="-"
+            
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Successfully parsed ssl_request_log - IP: $LOG_IP, Method: $LOG_METHOD, URL: $LOG_URL, Status: $LOG_STATUS" >&2
+            fi
+            
+            return 0
+        else
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Failed to parse ssl_request_log format - no quoted section found" >&2
+            fi
+            return 1
+        fi
+        
+    elif [ "$log_type" = "error_log" ]; then
+        # error_log形式の解析（C版完全互換）
+        # [client IP]パターンを検索
+        if [[ $log_line =~ \[client[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)[^\]]*\] ]]; then
+            LOG_IP="${BASH_REMATCH[1]}"
+            
+            # メッセージを抽出（[client IP]の後）
+            local client_end="${log_line#*\[client*\]}"
+            LOG_URL="${client_end# }"
+            
+            # タイムスタンプ抽出（最初の[...]）
+            if [[ $log_line =~ ^\[([^\]]+)\] ]]; then
+                LOG_TIMESTAMP="${BASH_REMATCH[1]}"
+            fi
+            
+            LOG_METHOD="ERROR_LOG"
+            LOG_STATUS="500"
+            LOG_SIZE="0"
+            LOG_USERNAME="-"
+            
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Successfully parsed error_log - IP: $LOG_IP, Message: ${LOG_URL:0:50}..." >&2
+            fi
+            
+            return 0
+        else
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Failed to find [client IP] pattern in error_log line" >&2
+            fi
+            return 1
+        fi
+        
+    elif [ "$log_type" = "timestamp_first_access_log" ]; then
+        # timestamp_first_access_log形式の解析（C版完全互換）
+        if [ "$DEBUG_MODE" = true ]; then
+            echo "DEBUG: Parsing timestamp_first_access_log line: ${log_line:0:200}" >&2
+        fi
+        
+        # タイムスタンプとIP抽出
+        if [[ $log_line =~ ^\[([^\]]+)\][[:space:]]+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            LOG_TIMESTAMP="${BASH_REMATCH[1]}"
+            LOG_IP="${BASH_REMATCH[2]}"
+            
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Extracted IP: '$LOG_IP'" >&2
+            fi
+        fi
+        
+        # 引用符で囲まれたリクエスト部分を検索
+        if [[ $log_line =~ \"([^\"]*)\" ]]; then
+            LOG_REQUEST="${BASH_REMATCH[1]}"
+            
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Extracted request: '$LOG_REQUEST'" >&2
+            fi
+            
+            # リクエストの内容を解析
+            if [ "$LOG_REQUEST" = "-" ]; then
+                LOG_METHOD="INCOMPLETE"
+                LOG_URL="-"
+            else
+                if [[ $LOG_REQUEST =~ ^([A-Z]+)[[:space:]]+([^[:space:]]+) ]]; then
+                    LOG_METHOD="${BASH_REMATCH[1]}"
+                    LOG_URL="${BASH_REMATCH[2]}"
+                else
+                    LOG_METHOD="${LOG_REQUEST%% *}"
+                    LOG_URL="/"
+                fi
+            fi
+            
+            # ステータスとサイズ抽出（引用符の後）
+            local after_request="${log_line#*\"$LOG_REQUEST\"}"
+            after_request="${after_request# }"
+            
+            local status_size_fields=($after_request)
+            if [ ${#status_size_fields[@]} -ge 1 ]; then
+                LOG_STATUS="${status_size_fields[0]}"
+            fi
+            if [ ${#status_size_fields[@]} -ge 2 ]; then
+                LOG_SIZE="${status_size_fields[1]}"
+            fi
+            
+            LOG_USERNAME="-"
+            
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Successfully parsed timestamp_first_access_log - IP: $LOG_IP, Method: $LOG_METHOD, URL: $LOG_URL, Status: $LOG_STATUS" >&2
+            fi
+            
+            return 0
+        else
+            if [ "$DEBUG_MODE" = true ]; then
+                echo "DEBUG: Failed to parse timestamp_first_access_log format - no quoted request found" >&2
+            fi
+            return 1
         fi
     fi
     
-    return 0
+    # すべての解析が失敗した場合
+    if [ "$DEBUG_MODE" = true ]; then
+        echo "Failed to parse log line (type: $log_type): ${log_line:0:100}..." >&2
+    fi
+    return 1
 }
 
 # URLエンコードされた文字列をデコードする関数
@@ -1002,7 +1410,7 @@ declare -A ERROR_ATTACK_TYPES=(
     ["404"]="リソース探索/偵察活動"
     ["405"]="HTTPメソッド攻撃"
     ["406"]="コンテンツネゴシエーション攻撃"
-    ["408"]="タイムアウト攻撃"
+    ["408"]="不完全なHTTPリクエスト"
     ["409"]="競合状態攻撃"
     ["410"]="削除済みリソース探索"
     ["413"]="ペイロード攻撃"
@@ -1011,12 +1419,15 @@ declare -A ERROR_ATTACK_TYPES=(
     ["429"]="レート制限回避試行"
 )
 
-# 400系エラーコード別の閾値設定
+# 400系エラーコード別の閾値設定（C版互換）
 declare -A ERROR_THRESHOLDS=(
     ["404"]=10      # 従来の404エラー検出
-    ["401"]=20      # 認証失敗検出（10分間）
-    ["403"]=20      # 認証失敗検出（10分間）
-    ["default"]=50  # その他の400系エラー（5分間）
+    ["401"]=3       # 認証失敗検出（5分間）- C版互換
+    ["403"]=3       # アクセス制御回避試行（5分間）- C版互換
+    ["400"]=3       # 不正リクエスト攻撃（5分間）- C版互換
+    ["408"]=1       # 不完全HTTPリクエスト（即座に検出）- C版互換
+    ["default"]=5   # その他の400系エラー（5分間）- C版互換
+    ["composite"]=2 # 複合的な400系エラー攻撃（異なる種類の4xxエラー）- C版互換
 )
 
 # 包括的な400系エラー検出機能
@@ -1075,30 +1486,57 @@ detect_4xx_errors() {
             specific_count="${BASH_REMATCH[1]}"
         fi
         
-        # 特定エラーコードの閾値チェック
+        # 特定エラーコードの閾値チェック（C版互換: 5分間ウィンドウ）
         if [ "$specific_count" -ge "$specific_threshold" ]; then
             local attack_type="${ERROR_ATTACK_TYPES[$status_code]:-"400系エラー攻撃"}"
             
-            # 401/403の場合は時間窓をチェック（10分間）
-            if [ "$status_code" = "401" ] || [ "$status_code" = "403" ]; then
-                local count_in_window=$(count_errors_in_window "$ip" "$status_code" "$unix_timestamp" 600)
-                if [ "$count_in_window" -ge "$specific_threshold" ]; then
-                    record_suspicious_ip "$ip" "$attack_type" "$count_in_window"
-                    if [ "$DEBUG_MODE" = true ]; then
-                        echo "4XX SPECIFIC DETECTED: IP $ip - $status_code errors: $count_in_window in 10-minute window" >&2
-                    fi
-                fi
-            else
-                record_suspicious_ip "$ip" "$attack_type" "$specific_count"
+            # 408エラー（不完全HTTPリクエスト）は即座に検出
+            if [ "$status_code" = "408" ]; then
+                record_suspicious_ip "$ip" "不完全なHTTPリクエスト" "$specific_count"
                 if [ "$DEBUG_MODE" = true ]; then
-                    echo "4XX SPECIFIC DETECTED: IP $ip - $status_code errors: $specific_count total" >&2
+                    echo "4XX INCOMPLETE REQUEST DETECTED: IP $ip - 408 errors: $specific_count" >&2
                 fi
+                return 0
+            fi
+            
+            # その他のエラーコードは時間窓をチェック（5分間）
+            local count_in_window=$(count_errors_in_window "$ip" "$status_code" "$unix_timestamp" 300)
+            if [ "$count_in_window" -ge "$specific_threshold" ]; then
+                record_suspicious_ip "$ip" "$attack_type" "$count_in_window"
+                if [ "$DEBUG_MODE" = true ]; then
+                    echo "4XX SPECIFIC DETECTED: IP $ip - $status_code errors: $count_in_window in 5-minute window" >&2
+                fi
+                return 0
             fi
         fi
     fi
     
-    # 5分間のスライディングウィンドウで400系エラー総数をチェック
+    # C版互換: 複合的な400系エラー攻撃の検出
     if [ -n "$unix_timestamp" ]; then
+        # 異なる種類の4xxエラーをカウント
+        local type_array=(${ip_4xx_types[$ip]})
+        local unique_error_types=0
+        for type_entry in "${type_array[@]}"; do
+            if [[ "$type_entry" =~ ^([0-9]+):([0-9]+)$ ]]; then
+                ((unique_error_types++))
+            fi
+        done
+        
+        # 複合的攻撃の検出（2種類以上の異なる4xxエラー）
+        if [ "$unique_error_types" -ge 2 ]; then
+            local composite_threshold="${ERROR_THRESHOLDS["composite"]}"
+            local total_count="${ip_4xx_counts[$ip]}"
+            
+            if [ "$total_count" -ge "$composite_threshold" ]; then
+                record_suspicious_ip "$ip" "複合的な400系エラー攻撃" "$total_count"
+                if [ "$DEBUG_MODE" = true ]; then
+                    echo "4XX COMPOSITE DETECTED: IP $ip - $total_count errors of $unique_error_types different types" >&2
+                fi
+                return 0
+            fi
+        fi
+        
+        # 5分間のスライディングウィンドウで400系エラー総数をチェック
         local count_in_window=$(count_errors_in_window "$ip" "all" "$unix_timestamp" 300)
         local default_threshold="${ERROR_THRESHOLDS["default"]}"
         
@@ -1182,8 +1620,9 @@ classify_4xx_attack() {
         fi
     done
     
-    # 攻撃タイプを分類
-    if [ "$unique_types" -ge 5 ]; then
+    # 攻撃タイプを分類（C版互換ロジック）
+    if [ "$unique_types" -ge 2 ]; then
+        # 2種類以上の異なる4xxエラーがある場合は複合的攻撃として分類
         echo "複合的な400系エラー攻撃"
     elif [ -n "$dominant_type" ] && [ -n "${ERROR_ATTACK_TYPES[$dominant_type]}" ]; then
         echo "${ERROR_ATTACK_TYPES[$dominant_type]}"
@@ -1192,24 +1631,9 @@ classify_4xx_attack() {
     fi
 }
 
-# 後方互換性のための404エラー検出関数（detect_4xx_errorsに統合済み）
-detect_404_errors() {
-    local ip="$1"
-    local status_code="$2"
-    
-    # 新しい包括的な4xx検出機能を呼び出し
-    detect_4xx_errors "$ip" "$status_code" ""
-}
 
-# 後方互換性のための認証失敗検出関数（detect_4xx_errorsに統合済み）
-detect_auth_failures() {
-    local ip="$1"
-    local status_code="$2"
-    local unix_timestamp="$3"
-    
-    # 新しい包括的な4xx検出機能を呼び出し
-    detect_4xx_errors "$ip" "$status_code" "$unix_timestamp"
-}
+
+
 
 # IP geolocation cache for performance optimization
 declare -A ip_country_cache
@@ -1536,31 +1960,56 @@ get_country_info() {
 record_suspicious_ip() {
     local ip="$1"
     local reason="$2"
+    local count="$3"
     
     # パフォーマンス測定
     ((performance_metrics["detection_count"]++))
-    local count="$3"
     
     # If count is empty, default to 1
     if [ -z "$count" ]; then
         count="1"
     fi
     
+    # C版互換の脅威レベル抽出
+    local threat_level="MEDIUM"
+    if [[ "$reason" == *"[CRITICAL]"* ]]; then
+        threat_level="CRITICAL"
+    elif [[ "$reason" == *"[HIGH]"* ]]; then
+        threat_level="HIGH"
+    elif [[ "$reason" == *"[LOW]"* ]]; then
+        threat_level="LOW"
+    fi
+    
+    # C版互換のタイムスタンプ追加
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
     # Record in the traditional way for backward compatibility
     if [ -n "$count" ]; then
-        suspicious_ips[$ip]="$reason:${count}回"
+        suspicious_ips[$ip]="$reason:${count}回 [$threat_level] ($timestamp)"
     else
-        suspicious_ips[$ip]="$reason"
+        suspicious_ips[$ip]="$reason [$threat_level] ($timestamp)"
+    fi
+    
+    # C版互換の包括的な記録（地理位置情報付き）
+    local country_info="N/A"
+    if [ "$ENABLE_GEO_LOOKUP" = true ]; then
+        country_info=$(get_country_info "$ip")
     fi
     
     # Also record in the comprehensive array for integrated reporting
-    local detection_entry="$ip|$reason|$count"
+    local detection_entry="$ip|$reason|$count|$threat_level|$timestamp|$country_info"
     all_suspicious_detections+=("$detection_entry")
+    
+    # C版互換のデバッグ出力
+    if [ "$DEBUG_MODE" = true ]; then
+        echo "Threat recorded: IP $ip - $reason [$threat_level] Count: $count Country: $country_info" >&2
+    fi
 }
 
 # Function to merge duplicate IP addresses and their detection reasons
 # This function integrates results from both access_log and error_log analysis
 merge_suspicious_ips() {
+    local log_type="${1:-access_log}"  # デフォルトはaccess_log
     local -A merged_ips
     local -A ip_priorities
     local -A ip_counts
@@ -1616,7 +2065,7 @@ merge_suspicious_ips() {
             continue
         fi
         
-        IFS='|' read -r ip reason count <<< "$detection"
+        IFS='|' read -r ip reason count threat_level timestamp country_info <<< "$detection"
         ((processed_detections++))
         
         # Skip empty entries
@@ -1624,9 +2073,9 @@ merge_suspicious_ips() {
             continue
         fi
         
-        # Set default count if empty
-        if [ -z "$count" ]; then
-            count="0"
+        # Set default count if empty or non-numeric
+        if [ -z "$count" ] || ! [[ "$count" =~ ^[0-9]+$ ]]; then
+            count="1"
         fi
         
         # Determine log source based on threat type
@@ -1667,7 +2116,13 @@ merge_suspicious_ips() {
             fi
             
             # Update count (take maximum for better threat assessment)
-            if [ "$count" -gt "$existing_count" ]; then
+            # Ensure both counts are numeric before comparison
+            if [[ "$count" =~ ^[0-9]+$ ]] && [[ "$existing_count" =~ ^[0-9]+$ ]]; then
+                if [ "$count" -gt "$existing_count" ]; then
+                    ip_counts[$ip]="$count"
+                fi
+            elif [[ "$count" =~ ^[0-9]+$ ]]; then
+                # Only new count is numeric, use it
                 ip_counts[$ip]="$count"
             fi
         else
@@ -1693,14 +2148,32 @@ merge_suspicious_ips() {
         
         # Format the reason with source information for comprehensive reporting
         local formatted_reason="$merged_reason"
+        # ログタイプに応じた検出元表示を決定
+        local detection_source=""
         if [[ "$source_info" == *","* ]]; then
             # Multiple sources detected this IP
-            formatted_reason="$merged_reason [統合検出: access_log+error_log]"
+            detection_source="統合検出: access_log+error_log"
         elif [[ "$source_info" == "error_log" ]]; then
-            formatted_reason="$merged_reason [error_log検出]"
+            detection_source="error_log検出"
         else
-            formatted_reason="$merged_reason [access_log検出]"
+            # ログタイプに応じて適切な検出元を表示
+            case "$log_type" in
+                "ssl_request_log"|"ssl_access_log")
+                    detection_source="SSL request log検出"
+                    ;;
+                "access_log")
+                    detection_source="access_log検出"
+                    ;;
+                "mixed_access_primary"|"mixed_error_primary")
+                    detection_source="混在ログ検出"
+                    ;;
+                *)
+                    detection_source="ログ検出"
+                    ;;
+            esac
         fi
+        
+        formatted_reason="$merged_reason [$detection_source]"
         
         if [ "$merged_count" != "0" ]; then
             suspicious_ips[$ip]="$formatted_reason:${merged_count}回"
@@ -1822,9 +2295,45 @@ sort_by_priority() {
     rm -f "$temp_file"
 }
 
-# Function to generate integrated report with access_log and error_log analysis results
-# Merges duplicate IP addresses and sorts by priority order
-# Includes error_log-derived threat information in report output
+# C版互換の脅威優先度判定機能
+get_threat_priority() {
+    local reason="$1"
+    
+    if [[ "$reason" =~ SQLインジェクション ]]; then echo 10; return; fi
+    if [[ "$reason" =~ WAF攻撃ブロック ]]; then echo 9; return; fi
+    if [[ "$reason" =~ 認証失敗.*ブルートフォース ]]; then echo 8; return; fi
+    if [[ "$reason" =~ 複合的な400系エラー ]]; then echo 8; return; fi
+    if [[ "$reason" =~ 高頻度アクセス ]]; then echo 7; return; fi
+    if [[ "$reason" =~ 大量の400系エラー ]]; then echo 7; return; fi
+    if [[ "$reason" =~ 不正リクエスト攻撃 ]]; then echo 6; return; fi
+    if [[ "$reason" =~ アクセス制御回避 ]]; then echo 6; return; fi
+    if [[ "$reason" =~ (リソース探索|偵察) ]]; then echo 6; return; fi
+    if [[ "$reason" =~ 404エラー ]]; then echo 6; return; fi
+    if [[ "$reason" =~ (権限拒否|権限昇格) ]]; then echo 5; return; fi
+    if [[ "$reason" =~ ディレクトリトラバーサル ]]; then echo 5; return; fi
+    if [[ "$reason" =~ HTTPメソッド攻撃 ]]; then echo 4; return; fi
+    if [[ "$reason" =~ ペイロード攻撃 ]]; then echo 4; return; fi
+    if [[ "$reason" =~ URI長攻撃 ]]; then echo 4; return; fi
+    if [[ "$reason" =~ レート制限回避 ]]; then echo 3; return; fi
+    if [[ "$reason" =~ SSL/TLS攻撃 ]]; then echo 3; return; fi
+    echo 1  # Default low priority
+}
+
+# C版互換の優先度ラベル取得機能
+get_priority_label() {
+    local priority="$1"
+    
+    if [ $priority -ge 8 ]; then
+        echo "[高]"
+    elif [ $priority -ge 5 ]; then
+        echo "[中]"
+    else
+        echo "[低]"
+    fi
+}
+
+# C版互換の包括的レポート生成機能
+# access_log, error_log, ssl_request_logの統合解析結果を表示
 generate_integrated_report() {
     local analysis_timestamp="$1"
     local log_type="$2"
@@ -1857,30 +2366,81 @@ generate_integrated_report() {
     echo "HTTPd ログ解析レポート"
     echo "========================================"
     echo "解析実行時刻: $analysis_timestamp"
-    echo "解析対象: $log_type_description"
+    echo "解析対象: 複数ログ形式対応 (Shell実装版)"
+    echo "地理位置検索: $([ "$ENABLE_GEO_LOOKUP" = true ] && echo "有効" || echo "無効")"
+    
+    # 処理時間の表示
+    local end_time=$(date +%s)
+    local processing_time=$((end_time - performance_metrics["start_time"]))
+    if [ $processing_time -lt 1 ]; then
+        echo "処理時間: < 1秒 (高速処理)"
+    else
+        echo "処理時間: ${processing_time}秒"
+    fi
+    echo ""
+    
+    # C版互換の解析統計の表示（基本情報のみ）
+    echo "解析統計:"
+    echo "----------------------------------------"
+    local total_lines=$((performance_metrics["processed_lines"] + performance_metrics["skipped_lines"]))
+    echo "総ログ行数: ${total_lines}行"
+    
+    local success_rate=0
+    if [ $total_lines -gt 0 ]; then
+        success_rate=$((performance_metrics["processed_lines"] * 100 / total_lines))
+    fi
+    echo "解析成功: ${performance_metrics["processed_lines"]}行 (${success_rate}%)"
+    
+    if [ ${performance_metrics["skipped_lines"]} -gt 0 ]; then
+        local failure_rate=$((performance_metrics["skipped_lines"] * 100 / total_lines))
+        echo "解析失敗: ${performance_metrics["skipped_lines"]}行 (${failure_rate}%)"
+    fi
+    
     echo ""
     
     # Merge duplicate IP addresses and their detection reasons
-    merge_suspicious_ips
+    merge_suspicious_ips "$log_type"
     
     # Check if any suspicious IPs were detected after merging
     if [ ${#suspicious_ips[@]} -eq 0 ]; then
         echo "疑わしい活動は検出されませんでした。"
-        echo "  - ${log_type_description}を解析しましたが、脅威は検出されませんでした。"
+        echo "  - ${performance_metrics["processed_lines"]}行のログを解析しましたが、脅威は検出されませんでした。"
         echo ""
         return 0
     fi
     
-    echo "疑わしいIPアドレスが検出されました (${log_type_description} 解析結果):"
+    # ログタイプに応じた表示
+    local log_type_display=""
+    case "$log_type" in
+        "access_log")
+            log_type_display="access_log 解析結果"
+            ;;
+        "ssl_request_log"|"ssl_access_log")
+            log_type_display="SSL request log 解析結果"
+            ;;
+        "error_log")
+            log_type_display="error_log 解析結果"
+            ;;
+        "mixed_access_primary")
+            log_type_display="混在ログ (access_log主体) 解析結果"
+            ;;
+        "mixed_error_primary")
+            log_type_display="混在ログ (error_log主体) 解析結果"
+            ;;
+        *)
+            log_type_display="ログ解析結果"
+            ;;
+    esac
+    
+    echo "疑わしいIPアドレスが検出されました ($log_type_display):"
     echo "----------------------------------------"
     
-    # Display threat summary by category and source
-    echo "検出された脅威の概要:"
+    # 脅威タイプの分析と統計計算
     local -A threat_summary
-    local -A source_summary
-    local access_log_threats=0
-    local error_log_threats=0
-    local integrated_threats=0
+    local -A threat_priorities
+    local high_priority=0
+    local medium_priority=0
+    local low_priority=0
     
     for ip in "${!suspicious_ips[@]}"; do
         local reason="${suspicious_ips[$ip]}"
@@ -1894,35 +2454,27 @@ generate_integrated_report() {
         # Remove source information for threat categorization
         base_reason=$(echo "$base_reason" | sed 's/ \[.*検出\]$//')
         
-        # Count threat sources
-        if [[ "$reason" =~ \[統合検出:.*\] ]]; then
-            ((integrated_threats++))
-        elif [[ "$reason" =~ \[error_log検出\] ]]; then
-            ((error_log_threats++))
+        # Get priority for this threat
+        local priority=$(get_threat_priority "$base_reason")
+        
+        if [ $priority -ge 8 ]; then
+            ((high_priority++))
+        elif [ $priority -ge 5 ]; then
+            ((medium_priority++))
         else
-            ((access_log_threats++))
+            ((low_priority++))
         fi
         
         # Count each threat type
-        if [[ "$base_reason" =~ ^([^+]+) ]]; then
-            local primary_threat="${BASH_REMATCH[1]}"
-            threat_summary[$primary_threat]=$((${threat_summary[$primary_threat]:-0} + 1))
-        else
-            threat_summary[$base_reason]=$((${threat_summary[$base_reason]:-0} + 1))
-        fi
+        threat_summary[$base_reason]=$((${threat_summary[$base_reason]:-0} + 1))
+        threat_priorities[$base_reason]=$priority
     done
     
-    # Display source summary - simplified for single log files
-    if [[ "$log_type" == "mixed_access_primary" || "$log_type" == "mixed_error_primary" ]]; then
-        echo "  ログソース別検出数:"
-        echo "    - access_log単独検出: ${access_log_threats}件"
-        echo "    - error_log単独検出: ${error_log_threats}件"
-        echo "    - 統合検出 (両ログ): ${integrated_threats}件"
-    else
-        local total_threats=$((access_log_threats + error_log_threats + integrated_threats))
-        echo "  ログソース別検出数: ${total_threats}件"
-    fi
+    echo "検出された脅威の概要:"
+    echo "  ログソース別検出数: ${#suspicious_ips[@]}件"
     echo ""
+    
+
     
     # Display threat summary sorted by priority
     echo "  脅威タイプ別検出数 (優先度順):"
@@ -2039,60 +2591,15 @@ generate_integrated_report() {
     done
     
     echo "--------------------------------------------------------------------------------------------------------"
-    echo ""
-    echo "優先度・検出元説明:"
-    echo "  [高] - 即座に対応が必要な重大な脅威 (SQLインジェクション、WAF攻撃ブロック、ブルートフォース)"
-    echo "  [中] - 監視が必要な中程度の脅威 (高頻度アクセス、偵察活動、権限昇格試行)"
-    echo "  [低] - 注意が必要な軽微な脅威 (アクセス制御違反、その他の異常パターン)"
-    echo ""
     
-    # Display source information based on log type
-    case "$log_type" in
-        "access_log")
-            echo "  [access_log検出] - アクセスログから検出された脅威"
-            ;;
-        "error_log")
-            echo "  [error_log検出] - エラーログから検出された脅威"
-            ;;
-        "ssl_request_log")
-            echo "  [ssl_request_log検出] - SSL/TLSリクエストログから検出された脅威"
-            ;;
-        "ssl_access_log")
-            echo "  [ssl_access_log検出] - SSL/TLSアクセスログから検出された脅威"
-            ;;
-        "mixed_access_primary"|"mixed_error_primary")
-            echo "  [access_log検出] - アクセスログから検出された脅威"
-            echo "  [error_log検出] - エラーログから検出された脅威"
-            echo "  [統合検出] - 両方のログから検出された脅威 (より信頼性が高い)"
-            ;;
-    esac
-    echo ""
+
     
-    echo "レポート生成完了: $(date)"
-    
-    # Display summary based on log type
-    case "$log_type" in
-        "mixed_access_primary"|"mixed_error_primary")
-            echo "総検出IP数: ${#suspicious_ips[@]}個 (access_log: ${access_log_threats}, error_log: ${error_log_threats}, 統合: ${integrated_threats})"
-            ;;
-        *)
-            echo "総検出IP数: ${#suspicious_ips[@]}個 (${log_type_description}から検出)"
-            ;;
-    esac
     echo ""
 }
 
 # Function to generate formatted report with suspicious IPs, counts, reasons, and countries
 # Sorts results by occurrence count in descending order
-# Displays message when no suspicious activity is detected
-# Includes timestamp of analysis execution
-generate_report() {
-    local analysis_timestamp="$1"
-    local log_type="$2"
-    
-    # Use integrated report function for comprehensive analysis
-    generate_integrated_report "$analysis_timestamp" "$log_type"
-}
+
 
 # Function to detect log type (access_log or error_log)
 # Enhanced version that supports mixed log files and line-by-line detection
@@ -2124,8 +2631,8 @@ detect_log_type() {
         elif [[ "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[[:space:]]+-[[:space:]]+-[[:space:]]+\[.*\][[:space:]]+\".*\"[[:space:]]+[0-9]+[[:space:]]+[0-9-]+.*TLS ]]; then
             ssl_access_log_count=$((ssl_access_log_count + 1))
         # Check for access_log patterns (Common/Combined Log Format)
-        # Pattern: IP - - [timestamp] "request" status size [optional fields]
-        elif [[ "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[[:space:]]+-[[:space:]]+-[[:space:]]+\[.*\][[:space:]]+\".*\"[[:space:]]+[0-9]+[[:space:]]+[0-9-]+ ]]; then
+        # Pattern: IP - username [timestamp] "request" status size [optional fields]
+        elif [[ "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[[:space:]]+-[[:space:]]+([^[:space:]]+|\"[^\"]*\")[[:space:]]+\[.*\][[:space:]]+\".*\"[[:space:]]+[0-9]+[[:space:]]+[0-9-]+ ]]; then
             access_log_count=$((access_log_count + 1))
         # Check for Apache error_log patterns
         # Pattern: [timestamp] [level] [pid] [client IP:port] message
@@ -2192,53 +2699,78 @@ detect_log_type() {
     fi
 }
 
-# Function to detect log type for a single line (for mixed log files)
-# This function is used when processing mixed log files line by line
+# C版完全互換のログタイプ検出関数
+# 単一行のログタイプを検出（混在ログファイル用）
 detect_line_log_type() {
     local line="$1"
     
-    # Skip empty lines and comments
-    [ -z "$line" ] && return 1
-    [[ "$line" =~ ^[[:space:]]*# ]] && return 1
+    # 空行とコメントをスキップ
+    [ -z "$line" ] && echo "unknown" && return 1
+    [[ "$line" =~ ^[[:space:]]*# ]] && echo "unknown" && return 1
     
-    # Check for access_log patterns (Common/Combined Log Format)
-    # Pattern: IP - - [timestamp] "request" status size [optional fields]
-    if [[ "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[[:space:]]+-[[:space:]]+-[[:space:]]+\[.*\][[:space:]]+\".*\"[[:space:]]+[0-9]+[[:space:]]+[0-9-]+ ]]; then
+    # Apache ssl_request_logパターンを最初にチェック（最も具体的）
+    # Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES256-GCM-SHA384 "GET /path HTTP/1.1" 200
+    # Pattern: [timestamp] IP SSLv3 DES-CBC3-SHA "GET /path HTTP/1.1" 4961
+    # Pattern: [timestamp] IP TLSv1 ECDHE-RSA-AES256-SHA "" 303 (empty request)
+    # Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES128-GCM-SHA256 "-" - (incomplete request)
+    # Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES128-GCM-SHA256 "quit" 303 (non-HTTP command)
+    # Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES256-GCM-SHA384 "{\"id\":1,\"method\"..." (JSON payload)
+    if [[ "$line" =~ (TLS|SSL) ]] && [[ "$line" =~ ^\[ ]] && [[ "$line" =~ \][[:space:]] ]] && [[ "$line" =~ \" ]]; then
+        # 標準HTTPメソッドをチェック
+        if [[ "$line" =~ (GET[[:space:]]|POST[[:space:]]|PUT[[:space:]]|DELETE[[:space:]]|HEAD[[:space:]]|OPTIONS[[:space:]]|PATCH[[:space:]]|PRI[[:space:]]|CONNECT[[:space:]]|TRACE[[:space:]]) ]] || \
+           [[ "$line" =~ \"\{.*\"id\": ]] || \
+           [[ "$line" =~ \"\"[[:space:]] ]] || \
+           [[ "$line" =~ \"-\"[[:space:]] ]]; then
+            echo "ssl_request_log"
+            return 0
+        fi
+        # 引用符で囲まれた内容をチェック（Non-HTTPコマンドの可能性）
+        if [[ "$line" =~ \"([^\"]+)\" ]]; then
+            echo "ssl_request_log"
+            return 0
+        fi
+    fi
+    
+    # error_logパターンをチェック
+    # Pattern: [timestamp] [level] [client IP] message
+    if [[ "$line" =~ ^\[ ]] && \
+       ([[ "$line" =~ \][[:space:]]+\[error\] ]] || [[ "$line" =~ \][[:space:]]+\[warn\] ]] || [[ "$line" =~ \][[:space:]]+\[notice\] ]] || \
+        [[ "$line" =~ \[client[[:space:]] ]] || [[ "$line" =~ client[[:space:]]denied ]]); then
+        echo "error_log"
+        return 0
+    fi
+    
+    # access_logパターンをチェック（Common/Combined Log Format）
+    # Pattern: IP - - [timestamp] "request" status size
+    # Pattern: IP - username [timestamp] "request" status size (with authentication)
+    # Pattern: IP - "" [timestamp] "request" status size (empty username)
+    if ([[ "$line" =~ [[:space:]]-[[:space:]]-[[:space:]]\[ ]] || [[ "$line" =~ [[:space:]]-[[:space:]]\"\"[[:space:]]\[ ]] || \
+        ([[ "$line" =~ [[:space:]]-[[:space:]] ]] && [[ "$line" =~ [[:space:]]\[ ]] && ! [[ "$line" =~ \][[:space:]]\[ ]])) && \
+       [[ "$line" =~ \][[:space:]]\" ]] && \
+       ([[ "$line" =~ GET[[:space:]] ]] || [[ "$line" =~ POST[[:space:]] ]] || [[ "$line" =~ PUT[[:space:]] ]] || [[ "$line" =~ DELETE[[:space:]] ]] || \
+        [[ "$line" =~ HEAD[[:space:]] ]] || [[ "$line" =~ OPTIONS[[:space:]] ]] || [[ "$line" =~ PATCH[[:space:]] ]] || [[ "$line" =~ PRI[[:space:]] ]] || \
+        [[ "$line" =~ CONNECT[[:space:]] ]] || [[ "$line" =~ TRACE[[:space:]] ]] || \
+        [[ "$line" =~ \"-\" ]] || [[ "$line" =~ \][[:space:]]\"\"[[:space:]] ]]); then
         echo "access_log"
         return 0
-    # Check for Apache error_log patterns
-    # Pattern: [timestamp] [level] [pid] [client IP:port] message
-    elif [[ "$line" =~ ^\[.*\][[:space:]]+\[.*\][[:space:]]+\[.*\][[:space:]]+\[client[[:space:]]+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+\] ]]; then
-        echo "error_log"
-        return 0
-    # Check for Nginx error_log patterns
-    # Pattern: timestamp level: message, client: IP, server: hostname
-    elif [[ "$line" =~ ^[0-9]{4}/[0-9]{2}/[0-9]{2}[[:space:]]+[0-9]{2}:[0-9]{2}:[0-9]{2}[[:space:]]+\[.*\].*client:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+.*server: ]]; then
-        echo "error_log"
-        return 0
-    # Check for simplified error_log patterns
-    # Pattern: [timestamp] [level] client IP message
-    elif [[ "$line" =~ ^\[.*\][[:space:]]+\[.*\][[:space:]]+client[[:space:]]+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-        echo "error_log"
-        return 0
-    # Check for generic error_log patterns (fallback)
-    elif [[ "$line" =~ ^\[.*\].*\[.*\].*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-        echo "error_log"
-        return 0
-    # Check for Apache ssl_request_log patterns
-    # Pattern: [timestamp] IP TLSv1.2 ECDHE-RSA-AES256-GCM-SHA384 "GET /path HTTP/1.1" 200
-    elif [[ "$line" =~ ^\[.*\][[:space:]]+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[[:space:]]+TLS.*[[:space:]]+.*[[:space:]]+\".*\"[[:space:]]+[0-9]+ ]]; then
-        echo "ssl_request_log"
-        return 0
-    # Check for Nginx ssl_access_log patterns
-    # Pattern: IP - - [timestamp] "GET /path HTTP/1.1" 200 size "referer" "user-agent" ssl_protocol ssl_cipher
-    elif [[ "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[[:space:]]+-[[:space:]]+-[[:space:]]+\[.*\][[:space:]]+\".*\"[[:space:]]+[0-9]+[[:space:]]+[0-9-]+.*TLS ]]; then
-        echo "ssl_access_log"
-        return 0
-    else
-        echo "unknown"
-        return 1
     fi
+    
+    # timestamp-first access_logパターンをチェック
+    # Pattern: [timestamp] IP - - "request" status size
+    if [[ "$line" =~ ^\[ ]] && \
+       [[ "$line" =~ \][[:space:]] ]] && \
+       [[ "$line" =~ [[:space:]]-[[:space:]]-[[:space:]]\" ]] && \
+       [[ "$line" =~ \" ]] && \
+       ([[ "$line" =~ GET[[:space:]] ]] || [[ "$line" =~ POST[[:space:]] ]] || [[ "$line" =~ PUT[[:space:]] ]] || [[ "$line" =~ DELETE[[:space:]] ]] || \
+        [[ "$line" =~ HEAD[[:space:]] ]] || [[ "$line" =~ OPTIONS[[:space:]] ]] || [[ "$line" =~ PATCH[[:space:]] ]] || [[ "$line" =~ PRI[[:space:]] ]] || \
+        [[ "$line" =~ CONNECT[[:space:]] ]] || [[ "$line" =~ TRACE[[:space:]] ]] || \
+        [[ "$line" =~ \"-\" ]] || [[ "$line" =~ [[:space:]]\"\"[[:space:]] ]]); then
+        echo "timestamp_first_access_log"
+        return 0
+    fi
+    
+    echo "unknown"
+    return 1
 }
 
 # Function to parse error_log entry and extract components
@@ -2398,13 +2930,14 @@ parse_ssl_request_log_entry() {
     return 0
 }
 
-# Function to detect threats in error_log entries
+# Function to detect threats in error_log entries - C版完全互換拡張版
 detect_error_log_threats() {
     local ip="$1"
     local message="$2"
     
-    # Define error_log threat patterns
+    # C版完全互換のエラーログ脅威パターン（拡張版）
     local -a ERROR_PATTERNS=(
+        # 基本パターン
         "ModSecurity.*denied"
         "ModSecurity.*blocked"
         "File does not exist"
@@ -2421,15 +2954,101 @@ detect_error_log_threats() {
         "Options ExecCGI is off"
         "Premature end of script headers"
         "malformed header from script"
+        
+        # C版追加の高度なパターン
+        "connection reset"
+        "timeout"
+        "malformed request"
+        "protocol error"
+        "certificate verification failed"
+        "cipher negotiation failed"
+        "buffer overflow"
+        "memory allocation failed"
+        "segmentation fault"
+        "core dumped"
+        "stack overflow"
+        "heap corruption"
+        "double free"
+        "use after free"
+        "null pointer dereference"
+        "format string vulnerability"
+        "integer overflow"
+        "race condition"
+        "authentication failure"
+        "invalid request"
+        "request entity too large"
+        "uri too long"
+        "method not allowed"
+        "unsupported media type"
+        "range not satisfiable"
+        "expectation failed"
+        "unprocessable entity"
+        "locked"
+        "failed dependency"
+        "upgrade required"
+        "precondition required"
+        "too many requests"
+        "request header fields too large"
+        "unavailable for legal reasons"
     )
     
     local message_lower=$(echo "$message" | tr '[:upper:]' '[:lower:]')
     
-    # Check for specific patterns first (more specific patterns have priority)
+    # Check for specific patterns with C版互換の詳細分類
     local pattern_matched=false
+    local threat_level="MEDIUM"
+    local detailed_reason=""
     
-    # Check for client denied patterns first (highest priority for access control violations)
-    if [[ "$message_lower" =~ "client denied" ]] || [[ "$message_lower" =~ "ah01630.*client denied" ]]; then
+    # Critical level threats (最高危険度)
+    if [[ "$message_lower" =~ "buffer overflow" ]] || [[ "$message_lower" =~ "stack overflow" ]] || [[ "$message_lower" =~ "heap corruption" ]]; then
+        detailed_reason="バッファオーバーフロー攻撃の可能性"
+        threat_level="CRITICAL"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "memory allocation failed" ]] || [[ "$message_lower" =~ "segmentation fault" ]] || [[ "$message_lower" =~ "core dumped" ]]; then
+        detailed_reason="メモリ攻撃 - システム不安定化の可能性"
+        threat_level="CRITICAL"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "double free" ]] || [[ "$message_lower" =~ "use after free" ]] || [[ "$message_lower" =~ "null pointer dereference" ]]; then
+        detailed_reason="メモリ破壊攻撃の可能性"
+        threat_level="CRITICAL"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "format string vulnerability" ]] || [[ "$message_lower" =~ "integer overflow" ]]; then
+        detailed_reason="コード実行攻撃の可能性"
+        threat_level="CRITICAL"
+        pattern_matched=true
+    
+    # High level threats (高危険度)
+    elif [[ "$message_lower" =~ "modsecurity.*denied" ]] || [[ "$message_lower" =~ "modsecurity.*blocked" ]]; then
+        detailed_reason="WAF攻撃ブロック - ModSecurity検出"
+        threat_level="HIGH"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "permission denied" ]]; then
+        detailed_reason="権限拒否 - 権限昇格攻撃の可能性"
+        threat_level="HIGH"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "script not found" ]]; then
+        detailed_reason="不正なスクリプト実行試行"
+        threat_level="HIGH"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "ssl handshake failed" ]] || [[ "$message_lower" =~ "certificate verification failed" ]] || [[ "$message_lower" =~ "cipher negotiation failed" ]]; then
+        detailed_reason="SSL/TLS攻撃の可能性"
+        threat_level="HIGH"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "authentication failure" ]]; then
+        detailed_reason="認証失敗 - ブルートフォースの可能性"
+        threat_level="HIGH"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "invalid request" ]] || [[ "$message_lower" =~ "malformed request" ]] || [[ "$message_lower" =~ "protocol error" ]]; then
+        detailed_reason="不正なリクエスト - プロトコル攻撃の可能性"
+        threat_level="HIGH"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "race condition" ]]; then
+        detailed_reason="競合状態攻撃の可能性"
+        threat_level="HIGH"
+        pattern_matched=true
+    
+    # Medium level threats (中危険度)
+    elif [[ "$message_lower" =~ "client denied by server configuration" ]]; then
         # IPごとのアクセス制御違反回数をカウント
         if [ -z "${ip_access_control_violations[$ip]}" ]; then
             ip_access_control_violations[$ip]=1
@@ -2441,59 +3060,73 @@ detect_error_log_threats() {
         
         # 10回以上の場合のみレポートに記録
         if [ $violation_count -ge 10 ]; then
-            record_suspicious_ip "$ip" "アクセス制御違反" "$violation_count"
+            detailed_reason="アクセス制御違反 (${violation_count}回)"
+            threat_level="MEDIUM"
+            pattern_matched=true
+            record_suspicious_ip "$ip" "$detailed_reason [$threat_level]" "$violation_count"
             if [ "$DEBUG_MODE" = true ]; then
-                echo "アクセス制御違反検出: IP $ip - ${violation_count}回目の違反を記録" >&2
+                echo "アクセス制御違反検出: IP $ip - ${violation_count}回目の違反を記録 [$threat_level]" >&2
             fi
         elif [ "$DEBUG_MODE" = true ]; then
             echo "アクセス制御違反カウント: IP $ip - ${violation_count}回 (閾値10回未満のため記録せず)" >&2
         fi
+        return 0  # Early return for this special case
+    elif [[ "$message_lower" =~ "client denied" ]] || [[ "$message_lower" =~ "ah01630.*client denied" ]]; then
+        detailed_reason="アクセス制御違反"
+        threat_level="MEDIUM"
         pattern_matched=true
-    # Check for ModSecurity patterns
-    elif [[ "$message_lower" =~ "modsecurity.*denied" ]] || [[ "$message_lower" =~ "modsecurity.*blocked" ]]; then
-        record_suspicious_ip "$ip" "WAF攻撃ブロック - ModSecurity" "1"
-        pattern_matched=true
-    # Check for file access patterns
     elif [[ "$message_lower" =~ "file does not exist" ]]; then
-        record_suspicious_ip "$ip" "存在しないファイルへのアクセス - 偵察の可能性" "1"
+        detailed_reason="存在しないファイルへのアクセス - 偵察の可能性"
+        threat_level="MEDIUM"
         pattern_matched=true
-    # Check for permission denied patterns
-    elif [[ "$message_lower" =~ "permission denied" ]]; then
-        record_suspicious_ip "$ip" "権限拒否 - 権限昇格攻撃の可能性" "1"
-        pattern_matched=true
-    # Check for script not found patterns
-    elif [[ "$message_lower" =~ "script not found" ]]; then
-        record_suspicious_ip "$ip" "不正なスクリプト実行試行" "1"
-        pattern_matched=true
-    # Check for invalid URI patterns
     elif [[ "$message_lower" =~ "invalid uri" ]]; then
-        record_suspicious_ip "$ip" "不正なURI - 攻撃の可能性" "1"
+        detailed_reason="不正なURI - 攻撃の可能性"
+        threat_level="MEDIUM"
         pattern_matched=true
-    # Check for request failed patterns
     elif [[ "$message_lower" =~ "request failed.*error reading the headers" ]]; then
-        record_suspicious_ip "$ip" "リクエスト失敗 - HTTP攻撃の可能性" "1"
+        detailed_reason="リクエスト失敗 - HTTP攻撃の可能性"
+        threat_level="MEDIUM"
         pattern_matched=true
-    # Check for SSL handshake failed patterns
-    elif [[ "$message_lower" =~ "ssl handshake failed" ]]; then
-        record_suspicious_ip "$ip" "SSL/TLS攻撃の可能性" "1"
-        pattern_matched=true
-    # Check for other access forbidden patterns
     elif [[ "$message_lower" =~ "access forbidden by rule" ]]; then
-        record_suspicious_ip "$ip" "アクセス制御違反" "1"
+        detailed_reason="アクセス制御違反"
+        threat_level="MEDIUM"
         pattern_matched=true
-    # Check for directory index forbidden patterns
-    elif [[ "$message_lower" =~ "directory index forbidden" ]]; then
-        record_suspicious_ip "$ip" "error_log異常パターン検出" "1"
+    elif [[ "$message_lower" =~ "connection reset" ]] || [[ "$message_lower" =~ "timeout" ]]; then
+        detailed_reason="接続異常 - DoS攻撃の可能性"
+        threat_level="MEDIUM"
         pattern_matched=true
-    # Check for other patterns
-    elif [[ "$message_lower" =~ "options execcgi is off" ]] || [[ "$message_lower" =~ "premature end of script headers" ]] || [[ "$message_lower" =~ "malformed header from script" ]]; then
-        record_suspicious_ip "$ip" "error_log異常パターン検出" "1"
+    elif [[ "$message_lower" =~ "request entity too large" ]] || [[ "$message_lower" =~ "uri too long" ]]; then
+        detailed_reason="大容量リクエスト攻撃の可能性"
+        threat_level="MEDIUM"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "too many requests" ]]; then
+        detailed_reason="レート制限違反 - DoS攻撃の可能性"
+        threat_level="MEDIUM"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "method not allowed" ]] || [[ "$message_lower" =~ "unsupported media type" ]]; then
+        detailed_reason="不正なHTTPメソッド/メディアタイプ攻撃"
+        threat_level="MEDIUM"
+        pattern_matched=true
+    elif [[ "$message_lower" =~ "directory index forbidden" ]] || [[ "$message_lower" =~ "options execcgi is off" ]] || [[ "$message_lower" =~ "premature end of script headers" ]] || [[ "$message_lower" =~ "malformed header from script" ]]; then
+        detailed_reason="error_log異常パターン検出"
+        threat_level="MEDIUM"
         pattern_matched=true
     fi
     
-    # If no specific pattern matched, record as general error_log anomaly
-    if [ "$pattern_matched" = false ]; then
-        record_suspicious_ip "$ip" "error_log異常パターン検出" "1"
+    # Record the threat if pattern matched
+    if [ "$pattern_matched" = true ]; then
+        record_suspicious_ip "$ip" "$detailed_reason [$threat_level]" "1"
+        
+        if [ "$DEBUG_MODE" = true ]; then
+            echo "Error log threat detected: IP $ip - $detailed_reason [$threat_level] in message: ${message:0:100}" >&2
+        fi
+        
+        # Update performance metrics
+        ((performance_metrics["detection_count"]++))
+    else
+        # If no specific pattern matched, record as general error_log anomaly
+        record_suspicious_ip "$ip" "error_log異常パターン検出 [LOW]" "1"
+        ((performance_metrics["detection_count"]++))
     fi
 }
 
@@ -2518,6 +3151,14 @@ parse_arguments() {
             --verbose)
                 VERBOSE_OUTPUT=true
                 shift
+                ;;
+            --chunk-size)
+                if [[ "$2" =~ ^[0-9]+$ ]] && [ "$2" -gt 0 ]; then
+                    CHUNK_SIZE="$2"
+                    shift 2
+                else
+                    display_error "INVALID_ARGUMENT" "チャンクサイズは正の数値で指定してください: $2" 1
+                fi
                 ;;
             -h|--help)
                 show_usage
@@ -3181,39 +3822,39 @@ cleanup_low_frequency_data() {
     done
 }
 
-# パフォーマンス統計の表示
+# パフォーマンス統計の表示（C版互換）
 show_performance_stats() {
     if [ "$VERBOSE_OUTPUT" = true ] || [ "$DEBUG_MODE" = true ]; then
         local end_time=$(date +%s)
         local duration=$((end_time - performance_metrics["start_time"]))
-        local lines_per_second=0
         
-        if [ $duration -gt 0 ]; then
-            lines_per_second=$((performance_metrics["processed_lines"] / duration))
+        echo ""
+        echo "=== パフォーマンス統計 ==="
+        echo "処理時間: ${duration}秒"
+        echo "処理行数: ${performance_metrics["processed_lines"]}"
+        echo "スキップ行数: ${performance_metrics["skipped_lines"]}"
+        echo "検出数: ${performance_metrics["detection_count"]}"
+        
+        if [ "$duration" -gt 0 ]; then
+            local lines_per_sec=$((performance_metrics["processed_lines"] / duration))
+            echo "処理速度: ${lines_per_sec}行/秒"
         fi
         
-        echo "" >&2
-        echo "=== パフォーマンス統計 ===" >&2
-        echo "処理時間: ${duration}秒" >&2
-        echo "処理行数: ${performance_metrics["processed_lines"]}" >&2
-        echo "スキップ行数: ${performance_metrics["skipped_lines"]}" >&2
-        echo "検出数: ${performance_metrics["detection_count"]}" >&2
-        echo "処理速度: ${lines_per_second}行/秒" >&2
-        echo "クリーンアップ実行回数: ${performance_metrics["cleanup_count"]}" >&2
-        echo "メモリ警告回数: ${performance_metrics["memory_warnings"]}" >&2
+        echo "クリーンアップ実行回数: ${performance_metrics["cleanup_count"]}"
+        echo "メモリ警告回数: ${performance_metrics["memory_warnings"]}"
         
-        if [ "${performance_metrics["cache_hits"]}" -gt 0 ] || [ "${performance_metrics["cache_misses"]}" -gt 0 ]; then
-            local total_cache=$((performance_metrics["cache_hits"] + performance_metrics["cache_misses"]))
-            local hit_rate=0
-            if [ $total_cache -gt 0 ]; then
-                hit_rate=$((performance_metrics["cache_hits"] * 100 / total_cache))
-            fi
-            echo "キャッシュヒット率: ${hit_rate}% (${performance_metrics["cache_hits"]}/${total_cache})" >&2
+        # キャッシュ効率
+        local total_cache_requests=$((performance_metrics["cache_hits"] + performance_metrics["cache_misses"]))
+        if [ "$total_cache_requests" -gt 0 ]; then
+            local cache_hit_rate=$((performance_metrics["cache_hits"] * 100 / total_cache_requests))
+            echo "キャッシュヒット率: ${cache_hit_rate}%"
         fi
         
         echo "=========================" >&2
     fi
 }
+
+
 
 # Main processing function
 main() {
@@ -3265,7 +3906,7 @@ main() {
     local start_time=$(date +%s)
     
     # Trap to handle interruption gracefully
-    trap 'echo ""; echo "Analysis interrupted by user. Generating partial report..."; generate_report "$(date) (INTERRUPTED)"; exit 130' INT TERM
+    trap 'echo ""; echo "Analysis interrupted by user. Generating partial report..."; generate_integrated_report "$(date) (INTERRUPTED)" "$log_type"; exit 130' INT TERM
     
     # Determine if we need line-by-line detection for mixed logs
     local is_mixed_log=false
@@ -3274,16 +3915,15 @@ main() {
         echo "Processing mixed log file with line-by-line detection..." >&2
     fi
     
-    # ファイルサイズをチェックしてチャンク処理を決定
+    # 処理方法を決定（最適化チャンク処理または標準処理）
     local file_size=$(stat -f%z "$log_file" 2>/dev/null || stat -c%s "$log_file" 2>/dev/null || echo "0")
     local chunk_threshold=$((50 * 1024 * 1024))  # 50MB
     
     if [ "$file_size" -gt "$chunk_threshold" ]; then
         echo "大容量ファイル検出 ($(($file_size / 1024 / 1024)) MB): チャンク処理を使用します" >&2
         # チャンク処理を実行
-        process_log_chunks "$log_file" 1000
+        process_log_chunks "$log_file" "$CHUNK_SIZE"
     else
-        echo "標準処理を実行します" >&2
         # 従来の処理ループ（小さなファイル用）
         while IFS= read -r line || [ -n "$line" ]; do
             ((line_count++))
@@ -3308,51 +3948,9 @@ main() {
     local end_time=$(date +%s)
     local processing_time=$((end_time - start_time))
     
-    echo "----------------------------------------"
-    echo "Analysis complete."
-    echo "Total lines read: $line_count"
-    echo "Successfully parsed entries: $processed_count"
-    echo "Invalid entries skipped: $error_count"
-    echo "Processing time: ${processing_time} seconds"
-    
-    # Calculate performance metrics
-    local success_rate=0
-    local processing_rate=0
-    if [ $line_count -gt 0 ]; then
-        success_rate=$(( (processed_count * 100) / line_count ))
-    fi
-    if [ $processing_time -gt 0 ]; then
-        processing_rate=$(( processed_count / processing_time ))
-    fi
-    
-    echo "Success rate: ${success_rate}%"
-    echo "Processing rate: ${processing_rate} entries/second"
-    
-    # Performance analysis and recommendations
-    if [ $processing_rate -lt 100 ] && [ $processed_count -gt 1000 ]; then
-        echo "PERFORMANCE: Processing rate is low. Consider:" >&2
-        echo "  - Processing smaller file chunks" >&2
-        echo "  - Disabling geolocation for faster analysis" >&2
-    fi
-    
-    # Warn if success rate is low
-    if [ $success_rate -lt 80 ] && [ $line_count -gt 10 ]; then
-        echo "WARNING: Low success rate detected. Please verify log file format." >&2
-        echo "Common issues: Mixed log formats, non-standard timestamps, encoding problems" >&2
-    fi
-    
-    # Memory usage summary
-    echo "Memory usage summary:"
-    echo "  - Unique IPs tracked: ${#ip_access_history[@]} (high-frequency)"
-    echo "  - Auth failure IPs: ${#ip_auth_failures[@]}"
-    echo "  - 404 error IPs: ${#ip_404_counts[@]}"
-    echo "  - Suspicious IPs detected: ${#suspicious_ips[@]}"
-    echo "  - Geolocation cache entries: ${#ip_country_cache[@]}"
-    
     # Generate integrated report with analysis timestamp
     local analysis_timestamp=$(date)
-    echo "Generating integrated report..." >&2
-    generate_report "$analysis_timestamp" "$log_type"
+    generate_integrated_report "$analysis_timestamp" "$log_type"
     
     # パフォーマンス統計の表示
     show_performance_stats
