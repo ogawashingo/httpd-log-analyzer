@@ -250,6 +250,179 @@ static const char *traversal_patterns[] = {
     NULL
 };
 
+// Shell injection patterns
+static const char *shell_patterns[] = {
+    // Basic shell commands
+    "cd\\s+/tmp",
+    "cd\\s+\\.\\.",
+    "rm\\s+-rf",
+    "rm\\s+-f",
+    "wget\\s+http",
+    "curl\\s+http",
+    "sh\\s+",
+    "bash\\s+",
+    "/bin/sh",
+    "/bin/bash",
+    "cat\\s+/etc",
+    "ls\\s+-",
+    "chmod\\s+",
+    "chown\\s+",
+    "nc\\s+-",
+    "netcat\\s+-",
+    "telnet\\s+",
+    "ssh\\s+",
+    "python\\s+-c",
+    "perl\\s+-e",
+    "ruby\\s+-e",
+    "php\\s+-r",
+    "node\\s+-e",
+    
+    // Dangerous command combinations
+    "wget.*sh",
+    "curl.*sh",
+    "wget.*bash",
+    "curl.*bash",
+    "cd.*rm.*wget",
+    "rm.*wget.*sh",
+    "cd.*&&.*rm",
+    "wget.*&&.*sh",
+    "curl.*&&.*bash",
+    "echo.*>.*sh",
+    "cat.*>.*sh",
+    
+    // URL encoded shell commands
+    "%20cd%20",
+    "%20rm%20",
+    "%20wget%20",
+    "%20curl%20",
+    "%20sh%20",
+    "%20bash%20",
+    "%2fbin%2fsh",
+    "%2fbin%2fbash",
+    "%3bcd%20",
+    "%3brm%20",
+    "%3bwget%20",
+    "%3bsh%20",
+    "%7cwget",
+    "%7csh",
+    "%7cbash",
+    "%26%26wget",
+    "%26%26sh",
+    "%26%26bash",
+    "%60wget",
+    "%60sh",
+    "%24%28wget",
+    "%24%28sh",
+    
+    // Command concatenation characters
+    ";.*wget",
+    ";.*curl",
+    ";.*sh",
+    ";.*bash",
+    ";.*rm",
+    ";.*cd",
+    "\\|.*sh",
+    "\\|.*bash",
+    "\\|.*wget",
+    "\\|.*curl",
+    "&.*curl",
+    "&.*wget",
+    "&.*sh",
+    "&.*bash",
+    "&&.*rm",
+    "&&.*wget",
+    "&&.*sh",
+    "&&.*bash",
+    "\\|\\|.*cd",
+    "\\|\\|.*rm",
+    "\\|\\|.*wget",
+    "`.*wget.*`",
+    "`.*sh.*`",
+    "`.*bash.*`",
+    "\\$\\(.*wget.*\\)",
+    "\\$\\(.*sh.*\\)",
+    "\\$\\(.*bash.*\\)",
+    "\\$\\(.*curl.*\\)",
+    
+    // System file access
+    "/etc/passwd",
+    "/etc/shadow",
+    "/etc/hosts",
+    "/etc/group",
+    "/etc/sudoers",
+    "/proc/version",
+    "/proc/cpuinfo",
+    "/proc/meminfo",
+    "/proc/mounts",
+    "/sys/class",
+    "/sys/devices",
+    "/var/log",
+    "/var/www",
+    "/home/",
+    "/root/",
+    "/tmp/",
+    "/dev/tcp",
+    "/dev/udp",
+    
+    // Privilege escalation commands
+    "sudo\\s+",
+    "su\\s+",
+    "su\\s+-",
+    "chmod\\s+\\+x",
+    "chmod\\s+777",
+    "chmod\\s+755",
+    "chown\\s+root",
+    "chgrp\\s+root",
+    "passwd\\s+",
+    "usermod\\s+",
+    "useradd\\s+",
+    "groupadd\\s+",
+    "visudo",
+    "crontab\\s+-e",
+    
+    // Reverse shell related
+    "/dev/tcp/.*/",
+    "nc\\s+-l",
+    "nc\\s+-e",
+    "netcat\\s+-l",
+    "netcat\\s+-e",
+    "socat\\s+",
+    "ncat\\s+",
+    "mkfifo\\s+",
+    "mknod\\s+",
+    
+    // Process manipulation
+    "kill\\s+-9",
+    "killall\\s+",
+    "pkill\\s+",
+    "ps\\s+aux",
+    "ps\\s+-ef",
+    "nohup\\s+",
+    
+    // Network related
+    "iptables\\s+",
+    "netstat\\s+",
+    "ss\\s+",
+    "lsof\\s+",
+    "tcpdump\\s+",
+    "nmap\\s+",
+    "ping\\s+-c",
+    "traceroute\\s+",
+    
+    // Double encoding
+    "%252fbin%252fsh",
+    "%252fbin%252fbash",
+    "%253bwget",
+    "%253bsh",
+    "%257cwget",
+    "%257csh",
+    "%2526%2526wget",
+    "%2560wget",
+    "%2524%2528wget",
+    
+    NULL
+};
+
 // Function prototypes
 static void show_usage(const char *program_name);
 static int parse_arguments(int argc, char *argv[], char **log_file);
@@ -259,6 +432,7 @@ static int parse_log_entry(const char *line, log_entry_t *entry);
 static time_t parse_timestamp(const char *timestamp_str);
 static void url_decode(char *dst, const char *src, size_t dst_size);
 static int detect_sql_injection(const char *url, const char *ip);
+static int detect_shell_injection(const char *url, const char *ip);
 static int detect_directory_traversal(const char *url, const char *ip);
 static int detect_error_log_threats(const char *message, const char *ip);
 static int detect_high_frequency_access(const char *ip, time_t timestamp);
@@ -276,6 +450,7 @@ static void to_lowercase(char *str);
 static int match_pattern(const char *text, const char *pattern);
 static void sanitize_string(char *str);
 static void print_progress(int current, int total);
+static void safe_debug_print(const char *prefix, const char *str, int max_len);
 
 // HTTP response callback for libcurl
 static size_t http_write_callback(void *contents, size_t size, size_t nmemb, http_response_t *response) {
@@ -297,6 +472,8 @@ static size_t http_write_callback(void *contents, size_t size, size_t nmemb, htt
 
 // Convert string to lowercase
 static void to_lowercase(char *str) {
+    if (!str) return;
+    
     for (int i = 0; str[i]; i++) {
         str[i] = tolower(str[i]);
     }
@@ -306,9 +483,20 @@ static void to_lowercase(char *str) {
 static int match_pattern(const char *text, const char *pattern) {
     if (!text || !pattern) return 0;
     
-    char *text_lower = strdup(text);
-    if (!text_lower) return 0;
+    // Use stack allocation for better performance and memory safety
+    size_t text_len = strlen(text);
+    if (text_len > 2048) {
+        // Skip very long strings to avoid memory issues
+        if (debug_mode) {
+            printf("DEBUG: Skipping pattern match for very long string (length: %zu)\n", text_len);
+        }
+        return 0;
+    }
     
+    // Use stack allocation for normal-sized strings
+    char text_lower[2049];
+    strncpy(text_lower, text, sizeof(text_lower) - 1);
+    text_lower[sizeof(text_lower) - 1] = '\0';
     to_lowercase(text_lower);
     
     int result = 0;
@@ -583,12 +771,354 @@ static int match_pattern(const char *text, const char *pattern) {
         result = (strstr(text_lower, "%c0%ae%c0%ae%c0%af") != NULL);
     } else if (strcmp(pattern, "%c1%9c") == 0) {
         result = (strstr(text_lower, "%c1%9c") != NULL);
+    }
+    
+    // Shell injection patterns
+    else if (strcmp(pattern, "cd\\s+/tmp") == 0) {
+        result = (strstr(text_lower, "cd") && strstr(text_lower, "/tmp"));
+    } else if (strcmp(pattern, "cd\\s+\\.\\.") == 0) {
+        result = (strstr(text_lower, "cd") && strstr(text_lower, ".."));
+    } else if (strcmp(pattern, "rm\\s+-rf") == 0) {
+        result = (strstr(text_lower, "rm ") && strstr(text_lower, "-rf")) ||
+                 (strstr(text_lower, "rm%20") && strstr(text_lower, "-rf"));
+    } else if (strcmp(pattern, "rm\\s+-f") == 0) {
+        result = (strstr(text_lower, "rm ") && strstr(text_lower, "-f")) ||
+                 (strstr(text_lower, "rm%20") && strstr(text_lower, "-f"));
+    } else if (strcmp(pattern, "wget\\s+http") == 0) {
+        result = (strstr(text_lower, "wget") && strstr(text_lower, "http"));
+    } else if (strcmp(pattern, "curl\\s+http") == 0) {
+        result = (strstr(text_lower, "curl") && strstr(text_lower, "http"));
+    } else if (strcmp(pattern, "sh\\s+") == 0) {
+        result = (strstr(text_lower, "sh ") != NULL);
+    } else if (strcmp(pattern, "bash\\s+") == 0) {
+        result = (strstr(text_lower, "bash ") != NULL);
+    } else if (strcmp(pattern, "/bin/sh") == 0) {
+        result = (strstr(text_lower, "/bin/sh") != NULL);
+    } else if (strcmp(pattern, "/bin/bash") == 0) {
+        result = (strstr(text_lower, "/bin/bash") != NULL);
+    } else if (strcmp(pattern, "cat\\s+/etc") == 0) {
+        result = (strstr(text_lower, "cat") && strstr(text_lower, "/etc"));
+    } else if (strcmp(pattern, "ls\\s+-") == 0) {
+        result = (strstr(text_lower, "ls ") && strstr(text_lower, "-")) ||
+                 (strstr(text_lower, "ls%20") && strstr(text_lower, "-"));
+    } else if (strcmp(pattern, "chmod\\s+") == 0) {
+        result = (strstr(text_lower, "chmod ") != NULL);
+    } else if (strcmp(pattern, "chown\\s+") == 0) {
+        result = (strstr(text_lower, "chown ") != NULL);
+    } else if (strcmp(pattern, "nc\\s+-") == 0) {
+        // More specific check for netcat command with options
+        result = (strstr(text_lower, "nc ") && strstr(text_lower, "-")) ||
+                 (strstr(text_lower, "nc%20") && strstr(text_lower, "-"));
+        if (debug_mode && result) {
+            printf("DEBUG: nc pattern matched - nc space: %s, nc%%20: %s, dash: %s\n",
+                   strstr(text_lower, "nc ") ? "YES" : "NO",
+                   strstr(text_lower, "nc%20") ? "YES" : "NO", 
+                   strstr(text_lower, "-") ? "YES" : "NO");
+        }
+    } else if (strcmp(pattern, "netcat\\s+-") == 0) {
+        result = (strstr(text_lower, "netcat") && strstr(text_lower, "-"));
+    } else if (strcmp(pattern, "python\\s+-c") == 0) {
+        result = (strstr(text_lower, "python") && strstr(text_lower, "-c"));
+    } else if (strcmp(pattern, "perl\\s+-e") == 0) {
+        result = (strstr(text_lower, "perl") && strstr(text_lower, "-e"));
+    } else if (strcmp(pattern, "ruby\\s+-e") == 0) {
+        result = (strstr(text_lower, "ruby") && strstr(text_lower, "-e"));
+    } else if (strcmp(pattern, "php\\s+-r") == 0) {
+        result = (strstr(text_lower, "php") && strstr(text_lower, "-r"));
+    } else if (strcmp(pattern, "node\\s+-e") == 0) {
+        result = (strstr(text_lower, "node") && strstr(text_lower, "-e"));
+    }
+    
+    // Dangerous command combinations
+    else if (strcmp(pattern, "wget.*sh") == 0) {
+        result = (strstr(text_lower, "wget") && (strstr(text_lower, ".sh") || strstr(text_lower, ";sh") || strstr(text_lower, "|sh") || strstr(text_lower, "&&sh")));
+    } else if (strcmp(pattern, "curl.*sh") == 0) {
+        result = (strstr(text_lower, "curl") && (strstr(text_lower, ".sh") || strstr(text_lower, ";sh") || strstr(text_lower, "|sh") || strstr(text_lower, "&&sh")));
+    } else if (strcmp(pattern, "wget.*bash") == 0) {
+        result = (strstr(text_lower, "wget") && (strstr(text_lower, ".bash") || strstr(text_lower, ";bash") || strstr(text_lower, "|bash") || strstr(text_lower, "&&bash")));
+    } else if (strcmp(pattern, "curl.*bash") == 0) {
+        result = (strstr(text_lower, "curl") && (strstr(text_lower, ".bash") || strstr(text_lower, ";bash") || strstr(text_lower, "|bash") || strstr(text_lower, "&&bash")));
+    } else if (strcmp(pattern, "cd.*rm.*wget") == 0) {
+        result = (strstr(text_lower, "cd ") && strstr(text_lower, "rm ") && strstr(text_lower, "wget"));
+    } else if (strcmp(pattern, "rm.*wget.*sh") == 0) {
+        result = (strstr(text_lower, "rm ") && strstr(text_lower, "wget") && (strstr(text_lower, ".sh") || strstr(text_lower, ";sh")));
+    } else if (strcmp(pattern, "cd.*&&.*rm") == 0) {
+        result = (strstr(text_lower, "cd ") && strstr(text_lower, "&&") && strstr(text_lower, "rm "));
+    } else if (strcmp(pattern, "wget.*&&.*sh") == 0) {
+        result = (strstr(text_lower, "wget") && strstr(text_lower, "&&") && (strstr(text_lower, "sh ") || strstr(text_lower, "sh%20")));
+    } else if (strcmp(pattern, "curl.*&&.*bash") == 0) {
+        result = (strstr(text_lower, "curl") && strstr(text_lower, "&&") && (strstr(text_lower, "bash ") || strstr(text_lower, "bash%20")));
+    } else if (strcmp(pattern, "echo.*>.*sh") == 0) {
+        result = (strstr(text_lower, "echo") && strstr(text_lower, ">") && (strstr(text_lower, ".sh") || strstr(text_lower, "sh ")));
+    } else if (strcmp(pattern, "cat.*>.*sh") == 0) {
+        result = (strstr(text_lower, "cat") && strstr(text_lower, ">") && strstr(text_lower, "sh"));
+    }
+    
+    // URL encoded shell commands
+    else if (strcmp(pattern, "%20cd%20") == 0) {
+        result = (strstr(text_lower, "%20cd%20") != NULL);
+    } else if (strcmp(pattern, "%20rm%20") == 0) {
+        result = (strstr(text_lower, "%20rm%20") != NULL);
+    } else if (strcmp(pattern, "%20wget%20") == 0) {
+        result = (strstr(text_lower, "%20wget%20") != NULL);
+    } else if (strcmp(pattern, "%20curl%20") == 0) {
+        result = (strstr(text_lower, "%20curl%20") != NULL);
+    } else if (strcmp(pattern, "%20sh%20") == 0) {
+        result = (strstr(text_lower, "%20sh%20") != NULL);
+    } else if (strcmp(pattern, "%20bash%20") == 0) {
+        result = (strstr(text_lower, "%20bash%20") != NULL);
+    } else if (strcmp(pattern, "%2fbin%2fsh") == 0) {
+        result = (strstr(text_lower, "%2fbin%2fsh") != NULL);
+    } else if (strcmp(pattern, "%2fbin%2fbash") == 0) {
+        result = (strstr(text_lower, "%2fbin%2fbash") != NULL);
+    } else if (strcmp(pattern, "%3bcd%20") == 0) {
+        result = (strstr(text_lower, "%3bcd%20") != NULL);
+    } else if (strcmp(pattern, "%3brm%20") == 0) {
+        result = (strstr(text_lower, "%3brm%20") != NULL);
+    } else if (strcmp(pattern, "%3bwget%20") == 0) {
+        result = (strstr(text_lower, "%3bwget%20") != NULL);
+    } else if (strcmp(pattern, "%3bsh%20") == 0) {
+        result = (strstr(text_lower, "%3bsh%20") != NULL);
+    } else if (strcmp(pattern, "%7cwget") == 0) {
+        result = (strstr(text_lower, "%7cwget") != NULL);
+    } else if (strcmp(pattern, "%7csh") == 0) {
+        result = (strstr(text_lower, "%7csh") != NULL);
+    } else if (strcmp(pattern, "%7cbash") == 0) {
+        result = (strstr(text_lower, "%7cbash") != NULL);
+    } else if (strcmp(pattern, "%26%26wget") == 0) {
+        result = (strstr(text_lower, "%26%26wget") != NULL);
+    } else if (strcmp(pattern, "%26%26sh") == 0) {
+        result = (strstr(text_lower, "%26%26sh") != NULL);
+    } else if (strcmp(pattern, "%26%26bash") == 0) {
+        result = (strstr(text_lower, "%26%26bash") != NULL);
+    } else if (strcmp(pattern, "%60wget") == 0) {
+        result = (strstr(text_lower, "%60wget") != NULL);
+    } else if (strcmp(pattern, "%60sh") == 0) {
+        result = (strstr(text_lower, "%60sh") != NULL);
+    } else if (strcmp(pattern, "%24%28wget") == 0) {
+        result = (strstr(text_lower, "%24%28wget") != NULL);
+    } else if (strcmp(pattern, "%24%28sh") == 0) {
+        result = (strstr(text_lower, "%24%28sh") != NULL);
+    }
+    
+    // Command concatenation patterns
+    else if (strcmp(pattern, ";.*wget") == 0) {
+        result = (strstr(text_lower, ";") && strstr(text_lower, "wget"));
+    } else if (strcmp(pattern, ";.*curl") == 0) {
+        result = (strstr(text_lower, ";") && strstr(text_lower, "curl"));
+    } else if (strcmp(pattern, ";.*sh") == 0) {
+        result = (strstr(text_lower, ";") && strstr(text_lower, "sh"));
+    } else if (strcmp(pattern, ";.*bash") == 0) {
+        result = (strstr(text_lower, ";") && strstr(text_lower, "bash"));
+    } else if (strcmp(pattern, ";.*rm") == 0) {
+        result = (strstr(text_lower, ";") && strstr(text_lower, "rm"));
+    } else if (strcmp(pattern, ";.*cd") == 0) {
+        result = (strstr(text_lower, ";") && strstr(text_lower, "cd"));
+    } else if (strcmp(pattern, "\\|.*sh") == 0) {
+        result = (strstr(text_lower, "|") && strstr(text_lower, "sh"));
+    } else if (strcmp(pattern, "\\|.*bash") == 0) {
+        result = (strstr(text_lower, "|") && strstr(text_lower, "bash"));
+    } else if (strcmp(pattern, "\\|.*wget") == 0) {
+        result = (strstr(text_lower, "|") && strstr(text_lower, "wget"));
+    } else if (strcmp(pattern, "\\|.*curl") == 0) {
+        result = (strstr(text_lower, "|") && strstr(text_lower, "curl"));
+    } else if (strcmp(pattern, "&.*curl") == 0) {
+        result = (strstr(text_lower, "&") && strstr(text_lower, "curl"));
+    } else if (strcmp(pattern, "&.*wget") == 0) {
+        result = (strstr(text_lower, "&") && strstr(text_lower, "wget") && 
+                 (strstr(text_lower, "&wget ") || strstr(text_lower, "&wget%20")));
+    } else if (strcmp(pattern, "&.*sh") == 0) {
+        result = (strstr(text_lower, "&") && strstr(text_lower, "sh") && 
+                 (strstr(text_lower, "&sh ") || strstr(text_lower, "&sh%20") || strstr(text_lower, "&sh;")));
+    } else if (strcmp(pattern, "&.*bash") == 0) {
+        result = (strstr(text_lower, "&") && strstr(text_lower, "bash") && 
+                 (strstr(text_lower, "&bash ") || strstr(text_lower, "&bash%20")));
+    } else if (strcmp(pattern, "&&.*rm") == 0) {
+        result = (strstr(text_lower, "&&") && strstr(text_lower, "rm"));
+    } else if (strcmp(pattern, "&&.*wget") == 0) {
+        result = (strstr(text_lower, "&&") && strstr(text_lower, "wget"));
+    } else if (strcmp(pattern, "&&.*sh") == 0) {
+        result = (strstr(text_lower, "&&") && strstr(text_lower, "sh"));
+    } else if (strcmp(pattern, "&&.*bash") == 0) {
+        result = (strstr(text_lower, "&&") && strstr(text_lower, "bash"));
+    } else if (strcmp(pattern, "\\|\\|.*cd") == 0) {
+        result = (strstr(text_lower, "||") && strstr(text_lower, "cd"));
+    } else if (strcmp(pattern, "\\|\\|.*rm") == 0) {
+        result = (strstr(text_lower, "||") && strstr(text_lower, "rm"));
+    } else if (strcmp(pattern, "\\|\\|.*wget") == 0) {
+        result = (strstr(text_lower, "||") && strstr(text_lower, "wget"));
+    } else if (strcmp(pattern, "`.*wget.*`") == 0) {
+        result = (strstr(text_lower, "`") && strstr(text_lower, "wget"));
+    } else if (strcmp(pattern, "`.*sh.*`") == 0) {
+        result = (strstr(text_lower, "`") && strstr(text_lower, "sh"));
+    } else if (strcmp(pattern, "`.*bash.*`") == 0) {
+        result = (strstr(text_lower, "`") && strstr(text_lower, "bash"));
+    } else if (strcmp(pattern, "\\$\\(.*wget.*\\)") == 0) {
+        result = (strstr(text_lower, "$(") && strstr(text_lower, "wget") && strstr(text_lower, ")"));
+    } else if (strcmp(pattern, "\\$\\(.*sh.*\\)") == 0) {
+        result = (strstr(text_lower, "$(") && strstr(text_lower, "sh") && strstr(text_lower, ")"));
+    } else if (strcmp(pattern, "\\$\\(.*bash.*\\)") == 0) {
+        result = (strstr(text_lower, "$(") && strstr(text_lower, "bash") && strstr(text_lower, ")"));
+    } else if (strcmp(pattern, "\\$\\(.*curl.*\\)") == 0) {
+        result = (strstr(text_lower, "$(") && strstr(text_lower, "curl") && strstr(text_lower, ")"));
+    }
+    
+    // System file access patterns
+    else if (strcmp(pattern, "/etc/passwd") == 0) {
+        result = (strstr(text_lower, "/etc/passwd") != NULL);
+    } else if (strcmp(pattern, "/etc/shadow") == 0) {
+        result = (strstr(text_lower, "/etc/shadow") != NULL);
+    } else if (strcmp(pattern, "/etc/hosts") == 0) {
+        result = (strstr(text_lower, "/etc/hosts") != NULL);
+    } else if (strcmp(pattern, "/etc/group") == 0) {
+        result = (strstr(text_lower, "/etc/group") != NULL);
+    } else if (strcmp(pattern, "/etc/sudoers") == 0) {
+        result = (strstr(text_lower, "/etc/sudoers") != NULL);
+    } else if (strcmp(pattern, "/proc/version") == 0) {
+        result = (strstr(text_lower, "/proc/version") != NULL);
+    } else if (strcmp(pattern, "/proc/cpuinfo") == 0) {
+        result = (strstr(text_lower, "/proc/cpuinfo") != NULL);
+    } else if (strcmp(pattern, "/proc/meminfo") == 0) {
+        result = (strstr(text_lower, "/proc/meminfo") != NULL);
+    } else if (strcmp(pattern, "/proc/mounts") == 0) {
+        result = (strstr(text_lower, "/proc/mounts") != NULL);
+    } else if (strcmp(pattern, "/sys/class") == 0) {
+        result = (strstr(text_lower, "/sys/class") != NULL);
+    } else if (strcmp(pattern, "/sys/devices") == 0) {
+        result = (strstr(text_lower, "/sys/devices") != NULL);
+    } else if (strcmp(pattern, "/var/log") == 0) {
+        result = (strstr(text_lower, "/var/log") != NULL);
+    } else if (strcmp(pattern, "/var/www") == 0) {
+        result = (strstr(text_lower, "/var/www") != NULL);
+    } else if (strcmp(pattern, "/home/") == 0) {
+        result = (strstr(text_lower, "/home/") != NULL);
+    } else if (strcmp(pattern, "/root/") == 0) {
+        result = (strstr(text_lower, "/root/") != NULL);
+    } else if (strcmp(pattern, "/tmp/") == 0) {
+        result = (strstr(text_lower, "/tmp/") != NULL);
+    } else if (strcmp(pattern, "/dev/tcp") == 0) {
+        result = (strstr(text_lower, "/dev/tcp") != NULL);
+    } else if (strcmp(pattern, "/dev/udp") == 0) {
+        result = (strstr(text_lower, "/dev/udp") != NULL);
+    }
+    
+    // Privilege escalation patterns
+    else if (strcmp(pattern, "sudo\\s+") == 0) {
+        result = (strstr(text_lower, "sudo ") != NULL);
+    } else if (strcmp(pattern, "su\\s+") == 0) {
+        result = (strstr(text_lower, "su ") != NULL);
+    } else if (strcmp(pattern, "su\\s+-") == 0) {
+        result = (strstr(text_lower, "su ") && strstr(text_lower, "-")) ||
+                 (strstr(text_lower, "su%20") && strstr(text_lower, "-"));
+    } else if (strcmp(pattern, "chmod\\s+\\+x") == 0) {
+        result = (strstr(text_lower, "chmod") && strstr(text_lower, "+x"));
+    } else if (strcmp(pattern, "chmod\\s+777") == 0) {
+        result = (strstr(text_lower, "chmod") && strstr(text_lower, "777"));
+    } else if (strcmp(pattern, "chmod\\s+755") == 0) {
+        result = (strstr(text_lower, "chmod") && strstr(text_lower, "755"));
+    } else if (strcmp(pattern, "chown\\s+root") == 0) {
+        result = (strstr(text_lower, "chown") && strstr(text_lower, "root"));
+    } else if (strcmp(pattern, "chgrp\\s+root") == 0) {
+        result = (strstr(text_lower, "chgrp") && strstr(text_lower, "root"));
+    } else if (strcmp(pattern, "passwd\\s+") == 0) {
+        result = (strstr(text_lower, "passwd ") != NULL);
+    } else if (strcmp(pattern, "usermod\\s+") == 0) {
+        result = (strstr(text_lower, "usermod ") != NULL);
+    } else if (strcmp(pattern, "useradd\\s+") == 0) {
+        result = (strstr(text_lower, "useradd ") != NULL);
+    } else if (strcmp(pattern, "groupadd\\s+") == 0) {
+        result = (strstr(text_lower, "groupadd ") != NULL);
+    } else if (strcmp(pattern, "visudo") == 0) {
+        result = (strstr(text_lower, "visudo") != NULL);
+    } else if (strcmp(pattern, "crontab\\s+-e") == 0) {
+        result = (strstr(text_lower, "crontab") && strstr(text_lower, "-e"));
+    }
+    
+    // Reverse shell and network patterns
+    else if (strcmp(pattern, "/dev/tcp/.*/") == 0) {
+        result = (strstr(text_lower, "/dev/tcp/") != NULL);
+    } else if (strcmp(pattern, "nc\\s+-l") == 0) {
+        result = (strstr(text_lower, "nc ") && strstr(text_lower, "-l")) ||
+                 (strstr(text_lower, "nc%20") && strstr(text_lower, "-l"));
+    } else if (strcmp(pattern, "nc\\s+-e") == 0) {
+        result = (strstr(text_lower, "nc ") && strstr(text_lower, "-e")) ||
+                 (strstr(text_lower, "nc%20") && strstr(text_lower, "-e"));
+    } else if (strcmp(pattern, "netcat\\s+-l") == 0) {
+        result = (strstr(text_lower, "netcat") && strstr(text_lower, "-l"));
+    } else if (strcmp(pattern, "netcat\\s+-e") == 0) {
+        result = (strstr(text_lower, "netcat") && strstr(text_lower, "-e"));
+    } else if (strcmp(pattern, "socat\\s+") == 0) {
+        result = (strstr(text_lower, "socat ") != NULL);
+    } else if (strcmp(pattern, "ncat\\s+") == 0) {
+        result = (strstr(text_lower, "ncat ") != NULL);
+    } else if (strcmp(pattern, "mkfifo\\s+") == 0) {
+        result = (strstr(text_lower, "mkfifo ") != NULL);
+    } else if (strcmp(pattern, "mknod\\s+") == 0) {
+        result = (strstr(text_lower, "mknod ") != NULL);
+    }
+    
+    // Process manipulation patterns
+    else if (strcmp(pattern, "kill\\s+-9") == 0) {
+        result = (strstr(text_lower, "kill ") && strstr(text_lower, "-9")) ||
+                 (strstr(text_lower, "kill%20") && strstr(text_lower, "-9"));
+    } else if (strcmp(pattern, "killall\\s+") == 0) {
+        result = (strstr(text_lower, "killall ") != NULL);
+    } else if (strcmp(pattern, "pkill\\s+") == 0) {
+        result = (strstr(text_lower, "pkill ") != NULL);
+    } else if (strcmp(pattern, "ps\\s+aux") == 0) {
+        result = (strstr(text_lower, "ps") && strstr(text_lower, "aux"));
+    } else if (strcmp(pattern, "ps\\s+-ef") == 0) {
+        result = (strstr(text_lower, "ps ") && strstr(text_lower, "-ef")) ||
+                 (strstr(text_lower, "ps%20") && strstr(text_lower, "-ef"));
+    } else if (strcmp(pattern, "nohup\\s+") == 0) {
+        result = (strstr(text_lower, "nohup ") != NULL);
+    }
+    
+    // Network related patterns
+    else if (strcmp(pattern, "iptables\\s+") == 0) {
+        result = (strstr(text_lower, "iptables ") != NULL);
+    } else if (strcmp(pattern, "netstat\\s+") == 0) {
+        result = (strstr(text_lower, "netstat ") != NULL);
+    } else if (strcmp(pattern, "ss\\s+") == 0) {
+        result = (strstr(text_lower, "ss ") != NULL);
+    } else if (strcmp(pattern, "lsof\\s+") == 0) {
+        result = (strstr(text_lower, "lsof ") != NULL);
+    } else if (strcmp(pattern, "tcpdump\\s+") == 0) {
+        result = (strstr(text_lower, "tcpdump ") != NULL);
+    } else if (strcmp(pattern, "nmap\\s+") == 0) {
+        result = (strstr(text_lower, "nmap ") != NULL);
+    } else if (strcmp(pattern, "ping\\s+-c") == 0) {
+        result = (strstr(text_lower, "ping ") && strstr(text_lower, "-c")) ||
+                 (strstr(text_lower, "ping%20") && strstr(text_lower, "-c"));
+    } else if (strcmp(pattern, "traceroute\\s+") == 0) {
+        result = (strstr(text_lower, "traceroute ") != NULL);
+    }
+    
+    // Double encoding patterns
+    else if (strcmp(pattern, "%252fbin%252fsh") == 0) {
+        result = (strstr(text_lower, "%252fbin%252fsh") != NULL);
+    } else if (strcmp(pattern, "%252fbin%252fbash") == 0) {
+        result = (strstr(text_lower, "%252fbin%252fbash") != NULL);
+    } else if (strcmp(pattern, "%253bwget") == 0) {
+        result = (strstr(text_lower, "%253bwget") != NULL);
+    } else if (strcmp(pattern, "%253bsh") == 0) {
+        result = (strstr(text_lower, "%253bsh") != NULL);
+    } else if (strcmp(pattern, "%257cwget") == 0) {
+        result = (strstr(text_lower, "%257cwget") != NULL);
+    } else if (strcmp(pattern, "%257csh") == 0) {
+        result = (strstr(text_lower, "%257csh") != NULL);
+    } else if (strcmp(pattern, "%2526%2526wget") == 0) {
+        result = (strstr(text_lower, "%2526%2526wget") != NULL);
+    } else if (strcmp(pattern, "%2560wget") == 0) {
+        result = (strstr(text_lower, "%2560wget") != NULL);
+    } else if (strcmp(pattern, "%2524%2528wget") == 0) {
+        result = (strstr(text_lower, "%2524%2528wget") != NULL);
     } else {
         // For other patterns, do simple substring search
         result = (strstr(text_lower, pattern) != NULL);
     }
     
-    free(text_lower);
+    // text_lower is stack allocated, no need to free
     return result;
 }
 
@@ -620,6 +1150,29 @@ static void print_progress(int current, int total) {
     fflush(stdout);
 }
 
+// Safe debug print function to handle binary data
+static void safe_debug_print(const char *prefix, const char *str, int max_len) {
+    if (!debug_mode || !str) return;
+    
+    char safe_str[512];
+    int j = 0;
+    int limit = (max_len > 0 && max_len < 500) ? max_len : 500;
+    
+    for (int i = 0; i < limit && str[i] != '\0' && j < 510; i++) {
+        if (str[i] >= 32 && str[i] <= 126) {
+            safe_str[j++] = str[i];
+        } else if (str[i] == '\n' || str[i] == '\r') {
+            safe_str[j++] = '\\';
+            safe_str[j++] = (str[i] == '\n') ? 'n' : 'r';
+        } else {
+            safe_str[j++] = '?';
+        }
+    }
+    safe_str[j] = '\0';
+    
+    printf("%s%s\n", prefix, safe_str);
+}
+
 // Show usage information
 static void show_usage(const char *program_name) {
     printf("Usage: %s [options] <logfile>\n\n", program_name);
@@ -639,6 +1192,7 @@ static void show_usage(const char *program_name) {
     printf("  - High frequency access (100+ requests in 5 minutes)\n");
     printf("  - Multiple 4xx errors (50+ client errors in 5 minutes)\n");
     printf("  - SQL injection attempts (UNION SELECT, DROP TABLE, etc.)\n");
+    printf("  - Shell injection attempts (rm -rf, wget;sh, /bin/sh, etc.)\n");
     printf("  - Authentication failures (20+ 401/403 errors in 10 minutes)\n");
     printf("  - Directory traversal attacks (../, ..\\, URL encoded variants)\n");
     printf("  - Error log analysis (ModSecurity blocks, file access attempts)\n\n");
@@ -836,7 +1390,7 @@ static const char* detect_line_log_type(const char *line) {
     
     // Debug output for problematic lines
     if (debug_mode && (strstr(line, "mining.subscribe") || strstr(line, "\\\"method\\\":"))) {
-        printf("DEBUG: Analyzing line for log type: %.200s\n", line);
+        safe_debug_print("DEBUG: Analyzing line for log type: ", line, 200);
         printf("DEBUG: Has ' - - [': %s\n", strstr(line, " - - [") ? "YES" : "NO");
         printf("DEBUG: Has '] \"': %s\n", strstr(line, "] \"") ? "YES" : "NO");
         printf("DEBUG: Has JSON pattern (escaped): %s\n", (strstr(line, "\"{") && strstr(line, "\\\"id\\\":")) ? "YES" : "NO");
@@ -894,6 +1448,8 @@ static const char* detect_line_log_type(const char *line) {
         if (strstr(line, "GET ") || strstr(line, "POST ") || strstr(line, "PUT ") || strstr(line, "DELETE ") ||
             strstr(line, "HEAD ") || strstr(line, "OPTIONS ") || strstr(line, "PATCH ") || strstr(line, "PRI ") ||
             strstr(line, "CONNECT ") || strstr(line, "TRACE ") ||
+            strstr(line, "PROPFIND ") || strstr(line, "PROPPATCH ") || strstr(line, "MKCOL ") ||
+            strstr(line, "COPY ") || strstr(line, "MOVE ") || strstr(line, "LOCK ") || strstr(line, "UNLOCK ") ||
             strstr(line, "\"-\"") || strstr(line, "] \"\" ") ||
             (strstr(line, "\"{") && strstr(line, "\\\"id\\\":")) ||  // JSON payload in access_log (escaped)
             (strstr(line, "\\\"method\\\":") && strstr(line, "mining")) ||  // Mining protocol JSON (escaped)
@@ -925,13 +1481,15 @@ static const char* detect_line_log_type(const char *line) {
         (strstr(line, "GET ") || strstr(line, "POST ") || strstr(line, "PUT ") || strstr(line, "DELETE ") ||
          strstr(line, "HEAD ") || strstr(line, "OPTIONS ") || strstr(line, "PATCH ") || strstr(line, "PRI ") ||
          strstr(line, "CONNECT ") || strstr(line, "TRACE ") ||
+         strstr(line, "PROPFIND ") || strstr(line, "PROPPATCH ") || strstr(line, "MKCOL ") ||
+         strstr(line, "COPY ") || strstr(line, "MOVE ") || strstr(line, "LOCK ") || strstr(line, "UNLOCK ") ||
          strstr(line, "\"-\"") || strstr(line, " \"\" "))) {  // Handle incomplete and empty requests
         return "timestamp_first_access_log";
     }
     
     // Debug output for unrecognized lines
     if (debug_mode && (strstr(line, "mining.subscribe") || strstr(line, "\\\"method\\\":"))) {
-        printf("DEBUG: Line not recognized as any log type: %.200s\n", line);
+        safe_debug_print("DEBUG: Line not recognized as any log type: ", line, 200);
     }
     
     return "unknown";
@@ -959,7 +1517,8 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
     }
     
     if (debug_mode) {
-        printf("DEBUG: Detected log type '%s' for line: %.100s\n", log_type, line);
+        printf("DEBUG: Detected log type '%s' for line: ", log_type);
+        safe_debug_print("", line, 100);
     }
     
     if (strcmp(log_type, "access_log") == 0) {
@@ -1597,7 +2156,7 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
         // Format: [timestamp] IP TLSv1.2 ECDHE-RSA-AES256-GCM-SHA384 "GET /path HTTP/1.1" 200
         
         if (debug_mode) {
-            printf("DEBUG: Parsing ssl_request_log line: %.200s\n", line);
+            safe_debug_print("DEBUG: Parsing ssl_request_log line: ", line, 200);
         }
         
         // Extract IP address (second field after closing bracket)
@@ -1885,7 +2444,7 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
         // Format: [timestamp] IP - - "request" status size
         
         if (debug_mode) {
-            printf("DEBUG: Parsing timestamp_first_access_log line: %.200s\n", line);
+            safe_debug_print("DEBUG: Parsing timestamp_first_access_log line: ", line, 200);
         }
         
         // Extract timestamp (first bracketed part)
@@ -2019,9 +2578,68 @@ static int parse_log_entry(const char *line, log_entry_t *entry) {
     
     // If all parsing attempts failed
     if (debug_mode) {
-        fprintf(stderr, "Failed to parse log line (type: %s): %.100s...\n", log_type, line);
+        char safe_line[102];
+        int j = 0;
+        for (int i = 0; i < 100 && line[i] != '\0' && j < 100; i++) {
+            if (line[i] >= 32 && line[i] <= 126) {
+                safe_line[j++] = line[i];
+            } else {
+                safe_line[j++] = '?';
+            }
+        }
+        safe_line[j] = '\0';
+        fprintf(stderr, "Failed to parse log line (type: %s): %s...\n", log_type, safe_line);
     }
     return 0;
+}
+
+// Record suspicious IP with accumulative count for specific reasons
+static void record_suspicious_ip_accumulative(const char *ip, const char *reason, int count) {
+    if (!ip || !reason || count <= 0) {
+        return;
+    }
+    
+    pthread_mutex_lock(&suspicious_ips.mutex);
+    
+    // Check if IP already exists with the same reason
+    for (int i = 0; i < suspicious_ips.count; i++) {
+        if (strcmp(suspicious_ips.ips[i].ip, ip) == 0 && 
+            strstr(suspicious_ips.ips[i].reason, reason)) {
+            suspicious_ips.ips[i].count += count;
+            suspicious_ips.ips[i].last_seen = time(NULL);
+            pthread_mutex_unlock(&suspicious_ips.mutex);
+            return;
+        }
+    }
+    
+    // Add new suspicious IP if not found
+    if (suspicious_ips.count < suspicious_ips.capacity && suspicious_ips.ips != NULL) {
+        suspicious_ip_t *new_ip = &suspicious_ips.ips[suspicious_ips.count];
+        snprintf(new_ip->ip, MAX_IP_LENGTH, "%s", ip);
+        snprintf(new_ip->reason, MAX_REASON_LENGTH, "%s", reason);
+        new_ip->count = count;
+        new_ip->first_seen = time(NULL);
+        new_ip->last_seen = time(NULL);
+        
+        // Get country info if enabled
+        if (enable_geo_lookup) {
+            char *country = get_country_info(ip);
+            if (country) {
+                strncpy(new_ip->country, country, MAX_COUNTRY_LENGTH - 1);
+                free(country);
+            } else {
+                strncpy(new_ip->country, "Unknown", sizeof(new_ip->country) - 1);
+                new_ip->country[sizeof(new_ip->country) - 1] = '\0';
+            }
+        } else {
+            strncpy(new_ip->country, "N/A", sizeof(new_ip->country) - 1);
+            new_ip->country[sizeof(new_ip->country) - 1] = '\0';
+        }
+        
+        suspicious_ips.count++;
+    }
+    
+    pthread_mutex_unlock(&suspicious_ips.mutex);
 }
 
 // Record suspicious IP
@@ -2037,8 +2655,21 @@ static void record_suspicious_ip(const char *ip, const char *reason, int count) 
             }
             suspicious_ips.ips[i].last_seen = time(NULL);
             
+            // For authentication failures, use the provided count directly (don't accumulate)
+            if (strstr(reason, "認証失敗") || strstr(reason, "ブルートフォース")) {
+                // Only update if the new count is higher (this prevents double counting)
+                if (count > suspicious_ips.ips[i].count) {
+                    suspicious_ips.ips[i].count = count;
+                    strncpy(suspicious_ips.ips[i].reason, reason, MAX_REASON_LENGTH - 1);
+                    if (debug_mode) {
+                        printf("DEBUG: Updated IP %s - Count: %d, Reason: %s\n", 
+                               ip, count, reason);
+                    }
+                }
+            }
             // Update reason if more severe or if count is higher
-            if (strstr(reason, "高リスク") || strstr(reason, "SQLインジェクション") || 
+            else if (strstr(reason, "高リスク") || strstr(reason, "SQLインジェクション") || 
+                strstr(reason, "複合シェルインジェクション攻撃") ||
                 count > suspicious_ips.ips[i].count) {
                 strncpy(suspicious_ips.ips[i].reason, reason, MAX_REASON_LENGTH - 1);
             }
@@ -2159,6 +2790,113 @@ static int detect_sql_injection(const char *url, const char *ip) {
     return 0;
 }
 
+// Detect shell injection with detailed pattern matching
+static int detect_shell_injection(const char *url, const char *ip) {
+    if (!url || !ip) return 0;
+    
+    char decoded_url[MAX_URL_LENGTH];
+    url_decode(decoded_url, url, sizeof(decoded_url));
+    
+    // Check both original and decoded URLs
+    const char *urls_to_check[] = {url, decoded_url, NULL};
+    const char *url_labels[] = {"元のURL", "URLデコード後", NULL};
+    
+    int shell_pattern_count = 0;
+    int high_risk_patterns = 0;
+    
+    for (int i = 0; urls_to_check[i]; i++) {
+        // Skip error log messages that commonly cause false positives
+        if (strstr(urls_to_check[i], "not found") || strstr(urls_to_check[i], "error:") ||
+            strstr(urls_to_check[i], "failed") || strstr(urls_to_check[i], "denied") ||
+            strstr(urls_to_check[i], "invalid") || strstr(urls_to_check[i], "missing")) {
+            continue;
+        }
+        
+        for (int j = 0; shell_patterns[j]; j++) {
+            if (match_pattern(urls_to_check[i], shell_patterns[j])) {
+                // Skip very short URLs to reduce false positives
+                if (strlen(urls_to_check[i]) < 8) {
+                    continue;
+                }
+                
+                shell_pattern_count++;
+                
+                // Identify high-risk patterns
+                if (strstr(shell_patterns[j], "rm.*-rf") || strstr(shell_patterns[j], "chmod.*777") ||
+                    strstr(shell_patterns[j], "sudo") || strstr(shell_patterns[j], "su") ||
+                    strstr(shell_patterns[j], "/bin/sh") || strstr(shell_patterns[j], "/bin/bash") ||
+                    strstr(shell_patterns[j], "nc.*-e") || strstr(shell_patterns[j], "socat") ||
+                    strstr(shell_patterns[j], "mkfifo") || strstr(shell_patterns[j], "/etc/passwd") ||
+                    strstr(shell_patterns[j], "/etc/shadow")) {
+                    high_risk_patterns++;
+                }
+                
+                char detailed_reason[MAX_REASON_LENGTH];
+                
+                // Create more specific reason based on pattern
+                if (strstr(shell_patterns[j], "rm.*-rf")) {
+                    snprintf(detailed_reason, sizeof(detailed_reason), 
+                            "シェルインジェクション攻撃の可能性 (ファイル削除攻撃)");
+                } else if (strstr(shell_patterns[j], "wget.*sh") || strstr(shell_patterns[j], "curl.*sh")) {
+                    snprintf(detailed_reason, sizeof(detailed_reason), 
+                            "シェルインジェクション攻撃の可能性 (リモートシェル実行攻撃)");
+                } else if (strstr(shell_patterns[j], "/bin/sh") || strstr(shell_patterns[j], "/bin/bash")) {
+                    snprintf(detailed_reason, sizeof(detailed_reason), 
+                            "シェルインジェクション攻撃の可能性 (直接シェル実行攻撃)");
+                } else if (strstr(shell_patterns[j], "sudo") || strstr(shell_patterns[j], "su")) {
+                    snprintf(detailed_reason, sizeof(detailed_reason), 
+                            "シェルインジェクション攻撃の可能性 (権限昇格攻撃)");
+                } else if (strstr(shell_patterns[j], "/etc/passwd") || strstr(shell_patterns[j], "/etc/shadow")) {
+                    snprintf(detailed_reason, sizeof(detailed_reason), 
+                            "シェルインジェクション攻撃の可能性 (システムファイルアクセス攻撃)");
+                } else if (strstr(shell_patterns[j], "nc.*-e") || strstr(shell_patterns[j], "socat") || 
+                          strstr(shell_patterns[j], "mkfifo")) {
+                    snprintf(detailed_reason, sizeof(detailed_reason), 
+                            "シェルインジェクション攻撃の可能性 (リバースシェル攻撃)");
+                } else if (strstr(shell_patterns[j], "%2f") || strstr(shell_patterns[j], "%3b") || 
+                          strstr(shell_patterns[j], "%7c") || strstr(shell_patterns[j], "%26")) {
+                    snprintf(detailed_reason, sizeof(detailed_reason), 
+                            "シェルインジェクション攻撃の可能性 (URLエンコード攻撃)");
+                } else if (strstr(shell_patterns[j], "chmod") || strstr(shell_patterns[j], "chown")) {
+                    snprintf(detailed_reason, sizeof(detailed_reason), 
+                            "シェルインジェクション攻撃の可能性 (ファイル権限変更攻撃)");
+                } else {
+                    snprintf(detailed_reason, sizeof(detailed_reason), 
+                            "シェルインジェクション攻撃の可能性");
+                }
+                
+                record_suspicious_ip(ip, detailed_reason, 1);
+                
+                if (debug_mode) {
+                    printf("Shell injection detected: IP %s - Pattern '%s' in %s: %.100s\n", 
+                           ip, shell_patterns[j], url_labels[i], urls_to_check[i]);
+                } else if (verbose_mode) {
+                    printf("DETECTION: %s matched shell pattern '%s' in URL: %.200s\n", 
+                           ip, shell_patterns[j], urls_to_check[i]);
+                }
+                
+                // Continue checking other patterns instead of returning immediately
+                // This allows detection of complex multi-pattern attacks
+            }
+        }
+    }
+    
+    // After checking all patterns, record complex attack information
+    if (shell_pattern_count >= 3 || high_risk_patterns >= 2) {
+        char complex_reason[MAX_REASON_LENGTH];
+        snprintf(complex_reason, sizeof(complex_reason), 
+                "複合シェルインジェクション攻撃 (%dパターン検出)", shell_pattern_count);
+        record_suspicious_ip(ip, complex_reason, shell_pattern_count);
+        
+        if (debug_mode) {
+            printf("Complex shell injection detected: IP %s - %d patterns, %d high-risk patterns\n", 
+                   ip, shell_pattern_count, high_risk_patterns);
+        }
+    }
+    
+    return shell_pattern_count > 0 ? 1 : 0;
+}
+
 // Track directory traversal attempts per IP
 static int ip_traversal_counts[1000] = {0}; // Simple tracking array
 static char ip_traversal_list[1000][MAX_IP_LENGTH]; // IP list for tracking
@@ -2272,6 +3010,10 @@ static const char *error_patterns[] = {
     "client denied by server configuration",
     "access forbidden",
     "authentication failure",
+    "user not found",
+    "user .* not found",
+    "invalid user",
+    "login failed",
     "invalid request",
     NULL
 };
@@ -2285,13 +3027,32 @@ static int detect_error_log_threats(const char *message, const char *ip) {
     
     to_lowercase(message_lower);
     
+    if (debug_mode) {
+        printf("DEBUG: Checking error patterns against message: %s\n", message_lower);
+    }
+    
     for (int i = 0; error_patterns[i]; i++) {
         char *pattern_lower = strdup(error_patterns[i]);
         if (!pattern_lower) continue;
         
         to_lowercase(pattern_lower);
         
-        if (strstr(message_lower, pattern_lower)) {
+        if (debug_mode) {
+            printf("DEBUG: Checking pattern '%s' against message\n", pattern_lower);
+        }
+        
+        // Special handling for regex-like patterns
+        int pattern_matched = 0;
+        if (strcmp(pattern_lower, "user .* not found") == 0) {
+            // Check for "user [anything] not found" pattern
+            if (strstr(message_lower, "user") && strstr(message_lower, "not found")) {
+                pattern_matched = 1;
+            }
+        } else if (strstr(message_lower, pattern_lower)) {
+            pattern_matched = 1;
+        }
+        
+        if (pattern_matched) {
             char detailed_reason[MAX_REASON_LENGTH];
             
             // Create specific reason based on pattern
@@ -2322,12 +3083,91 @@ static int detect_error_log_threats(const char *message, const char *ip) {
             } else if (strstr(pattern_lower, "authentication failure")) {
                 snprintf(detailed_reason, sizeof(detailed_reason), 
                         "認証失敗 - ブルートフォースの可能性");
+            } else if (strstr(pattern_lower, "user") && strstr(pattern_lower, "not found")) {
+                snprintf(detailed_reason, sizeof(detailed_reason), 
+                        "認証失敗 - 無効ユーザー試行");
+            } else if (strstr(pattern_lower, "invalid user")) {
+                snprintf(detailed_reason, sizeof(detailed_reason), 
+                        "認証失敗 - 無効ユーザー");
+            } else if (strstr(pattern_lower, "login failed")) {
+                snprintf(detailed_reason, sizeof(detailed_reason), 
+                        "認証失敗 - ログイン失敗");
             } else {
                 snprintf(detailed_reason, sizeof(detailed_reason), 
                         "error_log異常パターン検出");
             }
             
-            record_suspicious_ip(ip, detailed_reason, 1);
+            // For authentication failures, track them separately for brute force detection
+            if (strstr(pattern_lower, "user") && strstr(pattern_lower, "not found")) {
+                // Use global static variables to persist across function calls
+                static int auth_failure_counts[1000] = {0};
+                static char auth_failure_ips[1000][MAX_IP_LENGTH] = {0};
+                static time_t auth_failure_times[1000] = {0};
+                static int auth_failure_ip_count = 0;
+                
+                // Find or create entry for this IP
+                int ip_index = -1;
+                for (int j = 0; j < auth_failure_ip_count; j++) {
+                    if (strcmp(auth_failure_ips[j], ip) == 0) {
+                        ip_index = j;
+                        break;
+                    }
+                }
+                
+                if (ip_index == -1 && auth_failure_ip_count < 1000) {
+                    ip_index = auth_failure_ip_count++;
+                    strncpy(auth_failure_ips[ip_index], ip, MAX_IP_LENGTH - 1);
+                    auth_failure_counts[ip_index] = 0;
+                }
+                
+                if (ip_index >= 0) {
+                    auth_failure_counts[ip_index]++;
+                    auth_failure_times[ip_index] = time(NULL);
+                    
+                    if (debug_mode) {
+                        printf("DEBUG: Auth failure count for IP %s: %d\n", 
+                               ip, auth_failure_counts[ip_index]);
+                    }
+                    
+                    // Always record with the current count for this IP
+                    if (auth_failure_counts[ip_index] >= 3) {
+                        snprintf(detailed_reason, sizeof(detailed_reason), 
+                                "認証失敗 - ブルートフォースの可能性 (%d回試行)", 
+                                auth_failure_counts[ip_index]);
+                        if (debug_mode) {
+                            printf("DEBUG: Brute force detected for IP %s with %d attempts\n", 
+                                   ip, auth_failure_counts[ip_index]);
+                        }
+                    }
+                    
+                    // Record with the actual count for this IP
+                    record_suspicious_ip(ip, detailed_reason, auth_failure_counts[ip_index]);
+                    
+                    // Check for distributed brute force (multiple IPs with auth failures)
+                    if (auth_failure_counts[ip_index] < 3) {
+                        int total_recent_failures = 0;
+                        int active_ips = 0;
+                        time_t current_time = time(NULL);
+                        for (int k = 0; k < auth_failure_ip_count; k++) {
+                            if (current_time - auth_failure_times[k] <= 600) { // Within 10 minutes
+                                total_recent_failures += auth_failure_counts[k];
+                                active_ips++;
+                            }
+                        }
+                        
+                        if (total_recent_failures >= 10 && active_ips >= 5) {
+                            snprintf(detailed_reason, sizeof(detailed_reason), 
+                                    "分散型ブルートフォース攻撃の可能性 (%d IP、%d回試行)", 
+                                    active_ips, total_recent_failures);
+                            record_suspicious_ip(ip, detailed_reason, auth_failure_counts[ip_index]);
+                        }
+                    }
+                } else {
+                    record_suspicious_ip(ip, detailed_reason, 1);
+                }
+            } else {
+                record_suspicious_ip(ip, detailed_reason, 1);
+            }
             
             if (debug_mode) {
                 printf("Error log threat detected: IP %s - Pattern '%s' in message: %.100s\n", 
@@ -2663,10 +3503,22 @@ static int process_log_file(const char *filename) {
             
             // Detect various attack patterns
             int detected = 0;
-            detected += detect_high_frequency_access(entry.ip, entry.timestamp);
-            detected += detect_4xx_errors(entry.ip, entry.status, entry.timestamp);
-            detected += detect_sql_injection(entry.url, entry.ip);
-            detected += detect_directory_traversal(entry.url, entry.ip);
+            int high_freq = detect_high_frequency_access(entry.ip, entry.timestamp);
+            int errors_4xx = detect_4xx_errors(entry.ip, entry.status, entry.timestamp);
+            int sql_inj = detect_sql_injection(entry.url, entry.ip);
+            int shell_inj = detect_shell_injection(entry.url, entry.ip);
+            int dir_trav = detect_directory_traversal(entry.url, entry.ip);
+            
+            detected += high_freq + errors_4xx + sql_inj + shell_inj + dir_trav;
+            
+            if (debug_mode && (high_freq || errors_4xx || sql_inj || shell_inj || dir_trav)) {
+                printf("DEBUG: Threat detection results for IP %s, URL %s:\n", entry.ip, entry.url);
+                if (high_freq) printf("  - High frequency access: %d\n", high_freq);
+                if (errors_4xx) printf("  - 4xx errors: %d\n", errors_4xx);
+                if (sql_inj) printf("  - SQL injection: %d\n", sql_inj);
+                if (shell_inj) printf("  - Shell injection: %d\n", shell_inj);
+                if (dir_trav) printf("  - Directory traversal: %d\n", dir_trav);
+            }
             
             // Check for suspicious CONNECT method usage
             if (strcmp(entry.method, "CONNECT") == 0) {
@@ -2720,28 +3572,38 @@ static int process_log_file(const char *filename) {
                 strstr(entry.url, ".bak") || strstr(entry.url, ".backup")) {
                 
                 // For sensitive file access, we want to accumulate the count
-                // Find existing entry and increment, or create new one
-                pthread_mutex_lock(&suspicious_ips.mutex);
-                int found = 0;
-                for (int i = 0; i < suspicious_ips.count; i++) {
-                    if (strcmp(suspicious_ips.ips[i].ip, entry.ip) == 0 && 
-                        strstr(suspicious_ips.ips[i].reason, "機密ファイル探索")) {
-                        suspicious_ips.ips[i].count++;
-                        suspicious_ips.ips[i].last_seen = time(NULL);
-                        found = 1;
-                        break;
-                    }
-                }
-                pthread_mutex_unlock(&suspicious_ips.mutex);
-                
-                if (!found) {
-                    record_suspicious_ip(entry.ip, "機密ファイル探索/情報収集攻撃", 1);
-                }
+                record_suspicious_ip_accumulative(entry.ip, "機密ファイル探索", 1);
                 
                 detected++;
                 if (debug_mode) {
                     printf("DEBUG: Sensitive file access detected - IP: %s, URL: %s, Status: %d\n", 
                            entry.ip, entry.url, entry.status);
+                }
+            }
+            
+            // Check for PHPUnit RCE vulnerability exploitation (CVE-2017-9841)
+            if (strstr(entry.url, "phpunit") && strstr(entry.url, "eval-stdin.php")) {
+                record_suspicious_ip_accumulative(entry.ip, "PHPUnit RCE攻撃", 1);
+                detected++;
+                if (debug_mode) {
+                    printf("DEBUG: PHPUnit RCE attack detected - IP: %s, URL: %s, Status: %d\n", 
+                           entry.ip, entry.url, entry.status);
+                }
+            }
+            
+            // Check for WebDAV method abuse (potential unauthorized access)
+            if (strcmp(entry.method, "PROPFIND") == 0 || strcmp(entry.method, "PROPPATCH") == 0 ||
+                strcmp(entry.method, "MKCOL") == 0 || strcmp(entry.method, "COPY") == 0 ||
+                strcmp(entry.method, "MOVE") == 0 || strcmp(entry.method, "LOCK") == 0 ||
+                strcmp(entry.method, "UNLOCK") == 0) {
+                // WebDAV methods are often used for reconnaissance or unauthorized access
+                if (entry.status >= 400) {
+                    record_suspicious_ip(entry.ip, "WebDAV不正アクセス試行", 1);
+                    detected++;
+                    if (debug_mode) {
+                        printf("DEBUG: WebDAV method abuse detected - IP: %s, Method: %s, Status: %d\n", 
+                               entry.ip, entry.method, entry.status);
+                    }
                 }
             }
             
@@ -2776,6 +3638,10 @@ static int process_log_file(const char *filename) {
             
             // For error_log entries, also check for error-specific threats
             if (strcmp(entry.method, "ERROR_LOG") == 0) {
+                if (debug_mode) {
+                    printf("DEBUG: Checking error_log threats for IP %s, message: %.100s\n", 
+                           entry.ip, entry.url);
+                }
                 detected += detect_error_log_threats(entry.url, entry.ip);
             }
             
@@ -2785,7 +3651,17 @@ static int process_log_file(const char *filename) {
         } else {
             stats.skipped_lines++;
             if (debug_mode && line_count <= 10) {
-                printf("DEBUG: Failed to parse line %d: %.100s\n", line_count, line);
+                char safe_line[102];
+                int j = 0;
+                for (int i = 0; i < 100 && line[i] != '\0' && j < 100; i++) {
+                    if (line[i] >= 32 && line[i] <= 126) {
+                        safe_line[j++] = line[i];
+                    } else {
+                        safe_line[j++] = '?';
+                    }
+                }
+                safe_line[j] = '\0';
+                printf("DEBUG: Failed to parse line %d: %s\n", line_count, safe_line);
             }
         }
         
@@ -2816,7 +3692,11 @@ static int process_log_file(const char *filename) {
 
 // Priority mapping for threat types
 static int get_threat_priority(const char *reason) {
+    if (strstr(reason, "PHPUnit RCE攻撃")) return 10;  // Highest priority
     if (strstr(reason, "SQLインジェクション")) return 10;
+    if (strstr(reason, "シェルインジェクション攻撃")) return 10;  // Shell injection is critical
+    if (strstr(reason, "複合シェルインジェクション攻撃")) return 10;  // Complex shell injection
+    if (strstr(reason, "分散型ブルートフォース攻撃")) return 9;  // Distributed brute force is high priority
     if (strstr(reason, "WAF攻撃ブロック")) return 9;
     if (strstr(reason, "認証失敗") && strstr(reason, "ブルートフォース")) return 8;
     if (strstr(reason, "複合的な400系エラー")) return 8;
@@ -2826,6 +3706,7 @@ static int get_threat_priority(const char *reason) {
     if (strstr(reason, "アクセス制御回避")) return 6;
     if (strstr(reason, "リソース探索") || strstr(reason, "偵察")) return 6;
     if (strstr(reason, "機密ファイル探索") || strstr(reason, "情報収集攻撃")) return 8;
+    if (strstr(reason, "WebDAV不正アクセス")) return 7;
     if (strstr(reason, "404エラー")) return 6;
     if (strstr(reason, "権限拒否") || strstr(reason, "権限昇格")) return 5;
     if (strstr(reason, "ディレクトリトラバーサル")) return 5;
